@@ -27,3 +27,9 @@ export function validateRepoSlug(value: unknown): true | string {
 
   return true;
 }
+
+export function validateOptionalRepoSlug(value: unknown): true | string {
+  if (typeof value !== "string") return "Repo must be a string";
+  if (value.trim().length === 0) return true;
+  return validateRepoSlug(value);
+}

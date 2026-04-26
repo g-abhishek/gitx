@@ -14,9 +14,7 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
-    "preserveShebang": true
+    "resolveJsonModule": true
   },
   "include": ["src/**/*.ts"]
 }
-

@@ -1,6 +1,6 @@
 {
-  "name": "gitx",
-  "version": "0.1.0",
+  "name": "@g-abhishek/gitx",
+  "version": "0.1.1",
   "description": "AI-powered Git workflow automation CLI and SDK",
   "type": "module",
   "license": "MIT",
@@ -38,10 +38,11 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node ./scripts/postbuild-shebang.mjs ./dist/bin.js",
     "dev": "node --enable-source-maps dist/bin.js",
     "lint": "eslint .",
     "format": "prettier -w .",
+    "prepack": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -61,4 +62,3 @@
     "typescript-eslint": "^8.0.0"
   }
 }
-

@@ -13,9 +13,10 @@ export function isGitxConfig(value: unknown): value is GitxConfig {
 
   const providerOk = provider === "github" || provider === "gitlab" || provider === "azure";
   const tokenOk = typeof token === "string" && token.length > 0;
-  const repoOk = typeof repo === "string" && repo.includes("/") && !repo.includes(" ");
+  const repoOk =
+    repo === undefined ||
+    (typeof repo === "string" && repo.includes("/") && !repo.includes(" ") && repo.trim().length > 0);
   const branchOk = typeof defaultBranch === "string" && defaultBranch.length > 0;
 
   return providerOk && tokenOk && repoOk && branchOk;
 }
-

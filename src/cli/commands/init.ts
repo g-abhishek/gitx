@@ -5,7 +5,8 @@ import { logger } from "../../logger/logger.js";
 import { saveConfig } from "../../config/config.js";
 import type { GitxConfig } from "../../types/config.js";
 import type { ProviderKind } from "../../types/provider.js";
-import { validateNonEmpty, validateRepoSlug } from "../../utils/validators.js";
+import { validateNonEmpty, validateOptionalRepoSlug } from "../../utils/validators.js";
+import { resolveRepoSlugFromCwd } from "../../utils/git.js";
 
 export function registerInitCommand(program: Command): void {
   program
@@ -13,6 +14,8 @@ export function registerInitCommand(program: Command): void {
     .description("🚀 Initialize gitx configuration")
     .action(async () => {
       logger.info("📄 gitx init");
+
+      const inferredRepo = await resolveRepoSlugFromCwd();
 
       const answers = await inquirer.prompt<{
         provider: ProviderKind;
@@ -40,8 +43,9 @@ export function registerInitCommand(program: Command): void {
         {
           type: "input",
           name: "repo",
-          message: "Repo (e.g. owner/name)",
-          validate: validateRepoSlug
+          message: "Repo (optional; e.g. owner/name). Leave blank to infer from current git repo.",
+          default: inferredRepo,
+          validate: validateOptionalRepoSlug
         },
         {
           type: "input",
@@ -52,10 +56,12 @@ export function registerInitCommand(program: Command): void {
         }
       ]);
 
+      const repo = answers.repo.trim().length > 0 ? answers.repo.trim() : undefined;
+
       const config: GitxConfig = {
         provider: answers.provider,
         token: answers.token,
-        repo: answers.repo,
+        ...(repo ? { repo } : {}),
         defaultBranch: answers.defaultBranch
       };
 
@@ -67,4 +73,3 @@ export function registerInitCommand(program: Command): void {
       logger.info("Next: run `gitx implement \"<task>\" --mode=plan`");
     });
 }
-
