@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import type { ProviderKind } from "../types/provider.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -10,6 +11,15 @@ export async function getGitRemoteOriginUrl(cwd = process.cwd()): Promise<string
     return url.length > 0 ? url : undefined;
   } catch {
     return undefined;
+  }
+}
+
+export async function isInsideGitRepo(cwd = process.cwd()): Promise<boolean> {
+  try {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], { cwd });
+    return String(stdout ?? "").trim() === "true";
+  } catch {
+    return false;
   }
 }
 
@@ -40,4 +50,12 @@ export async function resolveRepoSlugFromCwd(cwd = process.cwd()): Promise<strin
   const originUrl = await getGitRemoteOriginUrl(cwd);
   if (!originUrl) return undefined;
   return inferRepoSlugFromRemote(originUrl);
+}
+
+export function detectProviderFromRemote(url: string): ProviderKind | undefined {
+  const cleaned = url.trim();
+  if (cleaned.includes("github.com")) return "github";
+  if (cleaned.includes("gitlab.com")) return "gitlab";
+  if (cleaned.includes("dev.azure.com") || cleaned.includes("visualstudio.com")) return "azure";
+  return undefined;
 }

@@ -6,17 +6,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function isGitxConfig(value: unknown): value is GitxConfig {
   if (!isRecord(value)) return false;
-  const provider = value["provider"];
-  const token = value["token"];
-  const repo = value["repo"];
+  const providers = value["providers"];
   const defaultBranch = value["defaultBranch"];
 
-  const providerOk = provider === "github" || provider === "gitlab" || provider === "azure";
-  const tokenOk = typeof token === "string" && token.length > 0;
-  const repoOk =
-    repo === undefined ||
-    (typeof repo === "string" && repo.includes("/") && !repo.includes(" ") && repo.trim().length > 0);
-  const branchOk = typeof defaultBranch === "string" && defaultBranch.length > 0;
+  if (!isRecord(providers)) return false;
 
-  return providerOk && tokenOk && repoOk && branchOk;
+  const allowed = new Set(["github", "gitlab", "azure"]);
+  for (const [k, v] of Object.entries(providers)) {
+    if (!allowed.has(k)) return false;
+    if (!isRecord(v)) return false;
+    if (typeof v["token"] !== "string" || String(v["token"]).trim().length === 0) return false;
+  }
+
+  const branchOk =
+    defaultBranch === undefined ||
+    (typeof defaultBranch === "string" && defaultBranch.trim().length > 0 && !defaultBranch.includes(" "));
+
+  return branchOk;
 }

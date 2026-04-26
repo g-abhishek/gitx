@@ -19,6 +19,9 @@ export function registerImplementCommand(program: Command): void {
       const mode = parseAutonomyMode(options.mode);
 
       const gitx = await Gitx.fromCwd();
+      const ctx = await gitx.getRepoContext();
+      logger.info(`📦 Repo: ${ctx.repoSlug}`);
+      logger.info(`🔌 Provider: ${ctx.provider}`);
 
       const spinner = ora("🧠 Analyzing task…").start();
       const analysis = await gitx.ai.analyzeTask(task);

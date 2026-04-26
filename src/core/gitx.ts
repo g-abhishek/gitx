@@ -3,8 +3,14 @@ import { loadConfig } from "../config/config.js";
 import { MockAi } from "../ai/mockAi.js";
 import type { AiClient } from "../ai/types.js";
 import type { GitxPlugin } from "./plugin.js";
-import { resolveRepoSlugFromCwd } from "../utils/git.js";
+import {
+  detectProviderFromRemote,
+  getGitRemoteOriginUrl,
+  inferRepoSlugFromRemote,
+  isInsideGitRepo
+} from "../utils/git.js";
 import { GitxError } from "../utils/errors.js";
+import type { RepoContext } from "./context.js";
 
 export class Gitx {
   public readonly config: GitxConfig;
@@ -29,13 +35,60 @@ export class Gitx {
     await plugin.setup(this);
   }
 
+  async getRepoContext(): Promise<RepoContext> {
+    if (!(await isInsideGitRepo(this.cwd))) {
+      throw new GitxError(
+        "No git repo detected in the current directory. Run gitx inside a git repository.",
+        { exitCode: 2 }
+      );
+    }
+
+    const originUrl = await getGitRemoteOriginUrl(this.cwd);
+    if (!originUrl) {
+      throw new GitxError("No `remote.origin.url` detected. Add an origin remote and retry.", {
+        exitCode: 2
+      });
+    }
+
+    const provider = detectProviderFromRemote(originUrl);
+    if (!provider) {
+      throw new GitxError(
+        `Unsupported git remote host for auto-detection: ${originUrl}.`,
+        { exitCode: 2 }
+      );
+    }
+
+    const token = this.config.providers[provider]?.token;
+    if (!token) {
+      throw new GitxError(
+        `No token configured for provider "${provider}". Re-run \`gitx init\` and add credentials for ${provider}.`,
+        { exitCode: 2 }
+      );
+    }
+
+    const repoSlug = inferRepoSlugFromRemote(originUrl);
+    if (!repoSlug) {
+      throw new GitxError(
+        `Could not infer repo slug from origin remote: ${originUrl}.`,
+        { exitCode: 2 }
+      );
+    }
+
+    return { provider, repoSlug, token };
+  }
+
   async getRepoSlug(): Promise<string> {
-    if (this.config.repo && this.config.repo.trim().length > 0) return this.config.repo;
-    const inferred = await resolveRepoSlugFromCwd(this.cwd);
-    if (inferred) return inferred;
-    throw new GitxError(
-      "Repo not configured and could not be inferred from git remote. Set `repo` in gitx config or run `gitx init` inside a repo with `origin`.",
-      { exitCode: 2 },
-    );
+    const ctx = await this.getRepoContext();
+    return ctx.repoSlug;
+  }
+
+  async getProvider(): Promise<RepoContext["provider"]> {
+    const ctx = await this.getRepoContext();
+    return ctx.provider;
+  }
+
+  async getToken(): Promise<string> {
+    const ctx = await this.getRepoContext();
+    return ctx.token;
   }
 }

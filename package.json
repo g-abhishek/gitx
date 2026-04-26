@@ -1,6 +1,6 @@
 {
   "name": "@g-abhishek/gitx",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "AI-powered Git workflow automation CLI and SDK",
   "type": "module",
   "license": "MIT",
