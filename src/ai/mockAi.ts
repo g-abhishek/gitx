@@ -71,5 +71,13 @@ export class MockAi implements AiClient {
       body: "",
     };
   }
+
+  async resolveConflict(filePath: string, conflictContent: string): Promise<import("./types.js").AiConflictResolutionResponse> {
+    return {
+      resolved: conflictContent,
+      confidence: "low",
+      explanation: `AI conflict resolution is not available (no AI provider configured). Please resolve ${filePath} manually.`,
+    };
+  }
 }
 

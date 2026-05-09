@@ -24,10 +24,14 @@ import type { Command } from "commander";
 import ora from "ora";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { readFile, writeFile } from "node:fs/promises";
+import { resolve as resolvePath } from "node:path";
+import { confirm } from "@inquirer/prompts";
 import { logger } from "../../logger/logger.js";
 import { getCurrentBranch, detectBaseBranch } from "../../utils/gitOps.js";
 import { isInsideGitRepo } from "../../utils/git.js";
 import { GitxError } from "../../utils/errors.js";
+import { Gitx } from "../../core/gitx.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -86,12 +90,12 @@ async function getInProgressOperation(
 export function registerSyncCommand(program: Command): void {
   program
     .command("sync")
-    .description("🔄 Sync current branch with its base to resolve PR merge conflicts")
+    .description("🔄 Sync current branch with its base branch (merge by default, or --strategy rebase)")
     .option("--base <branch>", "Base branch to sync with (auto-detected if omitted)")
     .option(
       "--strategy <strategy>",
-      "Sync strategy: rebase (default) | merge",
-      "rebase"
+      "Sync strategy: merge (default) | rebase",
+      "merge"
     )
     .option("--continue", "Continue after manually resolving conflicts")
     .option("--abort", "Abort an in-progress rebase or merge")
@@ -107,7 +111,7 @@ export function registerSyncCommand(program: Command): void {
         throw new GitxError("Not inside a git repository.", { exitCode: 2 });
       }
 
-      const strategy = opts.strategy === "merge" ? "merge" : "rebase";
+      const strategy = opts.strategy === "rebase" ? "rebase" : "merge";
 
       // ── Handle --abort ─────────────────────────────────────────────────────
       if (opts.abort) {
@@ -171,8 +175,8 @@ export function registerSyncCommand(program: Command): void {
         }
         continueSpinner.succeed(`${op.charAt(0).toUpperCase() + op.slice(1)} completed ✓`);
 
-        // Push
-        await pushAfterSync(cwd);
+        // Rebase rewrites history; merge does not
+        await pushAfterSync(cwd, op === "rebase");
         return;
       }
 
@@ -231,22 +235,133 @@ export function registerSyncCommand(program: Command): void {
 
       const { stderr: syncErr } = await git(syncArgs, cwd);
 
-      // Detect conflict
+      // Detect conflict — try AI resolution first
       const conflicts = await getConflictingFiles(cwd);
       if (conflicts.length > 0) {
-        syncSpinner.fail("Conflicts detected — manual resolution required.");
+        syncSpinner.fail(`Conflicts detected in ${conflicts.length} file(s) — attempting AI resolution…`);
 
-        logger.error(`\n⚠️  Merge conflicts in ${conflicts.length} file(s):\n`);
-        for (const f of conflicts) logger.info(`   • ${f}`);
+        // Try to load an AI client
+        let gitx: Gitx | null = null;
+        try {
+          gitx = await Gitx.fromCwd(cwd);
+        } catch {
+          // No AI available; fall through to manual instructions
+        }
 
-        logger.info(`\n  Steps to resolve:\n`);
-        logger.info(`  1. Open each file and fix the conflict markers (<<<<, ====, >>>>)`);
-        logger.info(`  2. Mark resolved:   git add <file>`);
-        logger.info(`  3. Finish sync:     gitx sync --continue`);
-        logger.info(`  4. Retry merge:     gitx pr merge <number>\n`);
-        logger.info(`  To give up and go back: gitx sync --abort\n`);
-        process.exitCode = 1;
-        return;
+        if (gitx && Gitx.isAiAvailable(gitx.config)) {
+          const resolved: string[] = [];
+          const needsManual: string[] = [];
+
+          for (const filePath of conflicts) {
+            const absPath = resolvePath(cwd, filePath);
+            let content: string;
+            try {
+              content = await readFile(absPath, "utf8");
+            } catch {
+              needsManual.push(filePath);
+              continue;
+            }
+
+            // Skip binary files (no conflict markers)
+            if (!content.includes("<<<<<<<")) {
+              needsManual.push(filePath);
+              continue;
+            }
+
+            const resolveSpinner = ora(`  🤖 AI resolving: ${filePath}`).start();
+            try {
+              const result = await gitx.ai.resolveConflict(filePath, content);
+
+              if (result.confidence === "high") {
+                await writeFile(absPath, result.resolved, "utf8");
+                resolveSpinner.succeed(`  ✅ Auto-resolved: ${filePath} — ${result.explanation}`);
+                resolved.push(filePath);
+              } else {
+                resolveSpinner.warn(`  ⚠️  Low confidence: ${filePath} — ${result.explanation}`);
+                logger.info(`\n  AI proposed resolution (low confidence). Preview:\n`);
+                // Show first 40 lines of the resolved content as a preview
+                const preview = result.resolved.split("\n").slice(0, 40).join("\n");
+                logger.info(preview);
+                if (result.resolved.split("\n").length > 40) {
+                  logger.info(`  … (${result.resolved.split("\n").length - 40} more lines)`);
+                }
+                logger.info("");
+
+                let apply = false;
+                try {
+                  apply = await confirm({
+                    message: `Apply AI resolution for ${filePath}?`,
+                    default: true,
+                  });
+                } catch {
+                  apply = false;
+                }
+
+                if (apply) {
+                  await writeFile(absPath, result.resolved, "utf8");
+                  logger.success(`  ✅ Applied: ${filePath}`);
+                  resolved.push(filePath);
+                } else {
+                  logger.info(`  ⏭️  Skipped: ${filePath} — resolve manually`);
+                  needsManual.push(filePath);
+                }
+              }
+            } catch {
+              resolveSpinner.fail(`  ❌ AI resolution failed for: ${filePath}`);
+              needsManual.push(filePath);
+            }
+          }
+
+          if (needsManual.length > 0) {
+            logger.error(`\n⚠️  ${needsManual.length} file(s) still need manual resolution:\n`);
+            for (const f of needsManual) logger.info(`   • ${f}`);
+            logger.info(`\n  Steps to finish:\n`);
+            logger.info(`  1. Open each file and fix the conflict markers (<<<<, ====, >>>>)`);
+            logger.info(`  2. Mark resolved:   git add <file>`);
+            logger.info(`  3. Finish sync:     gitx sync --continue`);
+            logger.info(`  4. Retry merge:     gitx pr merge <number>\n`);
+            logger.info(`  To give up and go back: gitx sync --abort\n`);
+            process.exitCode = 1;
+            return;
+          }
+
+          // All resolved — stage and continue
+          if (resolved.length > 0) {
+            logger.success(`\n✅ AI resolved all ${resolved.length} conflict(s). Staging and continuing…\n`);
+            await git(["add", "-A"], cwd);
+
+            const env = { ...process.env, GIT_EDITOR: "true" };
+            const { stderr: contErr } = await execFileAsync(
+              "git",
+              [strategy === "rebase" ? "rebase" : "merge", "--continue"],
+              { cwd, env }
+            ).then(
+              (r) => ({ stdout: r.stdout, stderr: "" }),
+              (e: { stderr?: string; message?: string }) => ({
+                stdout: "",
+                stderr: (e.stderr ?? e.message ?? "").trim(),
+              })
+            );
+
+            if (contErr && !contErr.toLowerCase().includes("successfully")) {
+              logger.error(`Could not continue ${strategy}: ${contErr}`);
+              process.exitCode = 1;
+              return;
+            }
+          }
+        } else {
+          // No AI — fall back to manual instructions
+          logger.error(`\n⚠️  Merge conflicts in ${conflicts.length} file(s):\n`);
+          for (const f of conflicts) logger.info(`   • ${f}`);
+          logger.info(`\n  Steps to resolve:\n`);
+          logger.info(`  1. Open each file and fix the conflict markers (<<<<, ====, >>>>)`);
+          logger.info(`  2. Mark resolved:   git add <file>`);
+          logger.info(`  3. Finish sync:     gitx sync --continue`);
+          logger.info(`  4. Retry merge:     gitx pr merge <number>\n`);
+          logger.info(`  To give up and go back: gitx sync --abort\n`);
+          process.exitCode = 1;
+          return;
+        }
       }
 
       if (syncErr && !syncErr.toLowerCase().includes("successfully")) {
@@ -261,19 +376,25 @@ export function registerSyncCommand(program: Command): void {
           : `Merged origin/${base} into ${head} ✓`
       );
 
-      // Push
-      await pushAfterSync(cwd);
+      // Rebase rewrites history → force-with-lease; merge → plain push
+      await pushAfterSync(cwd, strategy === "rebase");
     });
 }
 
-async function pushAfterSync(cwd: string): Promise<void> {
-  const pushSpinner = ora("Pushing (force-with-lease)…").start();
-  // Rebase rewrites history, so force push is required.
-  // --force-with-lease is safe: it refuses to push if someone else pushed in the meantime.
-  const { stderr } = await git(["push", "--force-with-lease"], cwd);
+async function pushAfterSync(cwd: string, forceWithLease = false): Promise<void> {
+  // Rebase rewrites history → requires --force-with-lease.
+  // Merge does not rewrite history → plain push is fine.
+  const pushArgs = forceWithLease
+    ? ["push", "--force-with-lease"]
+    : ["push"];
+
+  const label = forceWithLease ? "Pushing (force-with-lease)…" : "Pushing…";
+  const pushSpinner = ora(label).start();
+  const { stderr } = await git(pushArgs, cwd);
   if (stderr && stderr.includes("error")) {
     pushSpinner.fail(`Push failed: ${stderr}`);
-    logger.info(`  Try: git push --force-with-lease`);
+    const hint = forceWithLease ? "git push --force-with-lease" : "git push";
+    logger.info(`  Try: ${hint}`);
     process.exitCode = 1;
     return;
   }
