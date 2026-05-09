@@ -72,6 +72,33 @@ export interface AiClient {
    * Returns the fully resolved file content + confidence level.
    */
   resolveConflict(filePath: string, conflictContent: string): Promise<AiConflictResolutionResponse>;
+
+  /**
+   * Senior-developer quality PR review with full codebase context.
+   * Returns inline comments, checklist, and a formal verdict.
+   */
+  reviewPRDetailed(context: {
+    /** PR title */
+    prTitle: string;
+    /** PR description */
+    prBody: string;
+    /** Author of the PR */
+    author: string;
+    /** Source branch name */
+    headBranch: string;
+    /** Target branch name */
+    baseBranch: string;
+    /** Full unified diff of the PR (may be truncated) */
+    diff: string;
+    /** Files changed — key: relative path, value: FULL file content after changes */
+    changedFiles: Record<string, string>;
+    /** Supporting context files the changes depend on */
+    contextFiles: Record<string, string>;
+    /** Flat list of all repo files (for structural awareness) */
+    repoFileList: string[];
+    /** Existing PR comments */
+    existingComments: Array<{ author: string; body: string; path?: string; line?: number }>;
+  }): Promise<AiDetailedReviewResponse>;
 }
 
 export interface AiReviewPRResponse {
@@ -84,4 +111,48 @@ export interface AiReviewPRResponse {
   }>;
   positives: string[];
   verdict: "approve" | "request_changes" | "comment";
+}
+
+/** Inline comment on a specific file + line produced by the senior-dev review. */
+export interface AiInlineComment {
+  /** Relative path to the file being commented on */
+  path: string;
+  /** The line number in the NEW (right) version of the file */
+  line: number;
+  /** The comment body (markdown supported) */
+  body: string;
+  /** Severity for local display */
+  severity: "critical" | "warning" | "suggestion";
+  /** Optional drop-in code suggestion (replaces the commented line) */
+  suggestion?: string;
+}
+
+/**
+ * Rich structured review response from the senior-dev AI reviewer.
+ * Supersedes the basic AiReviewPRResponse for the `gitx pr review` command.
+ */
+export interface AiDetailedReviewResponse {
+  /** 3-5 sentence executive summary of the PR */
+  summary: string;
+  /** Verdict to submit to the hosting platform */
+  verdict: "approve" | "request_changes" | "comment";
+  /** High-level issues not tied to a specific line */
+  issues: Array<{
+    severity: "critical" | "warning" | "suggestion";
+    description: string;
+    file?: string;
+    line?: number;
+  }>;
+  /** Specific inline comments on changed lines */
+  inlineComments: AiInlineComment[];
+  /** Things done well in this PR */
+  positives: string[];
+  /** How to manually test the changes */
+  testingNotes: string;
+  /** Which review dimensions were checked */
+  checklist: Array<{
+    area: string;   // e.g. "Security", "Performance", "Error handling"
+    status: "pass" | "warn" | "fail";
+    note: string;
+  }>;
 }

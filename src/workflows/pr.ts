@@ -16,12 +16,72 @@ export interface ReviewResult {
   pr: PullRequest;
   comments: PullRequestComment[];
   aiSummary: string;
-  review?: import("../ai/types.js").AiReviewPRResponse;
+  review?: import("../ai/types.js").AiDetailedReviewResponse;
 }
 
 /**
- * Fetch a PR, its diff, and its comments; generate a structured AI review;
- * then optionally post it back as a PR comment.
+ * Parse a unified diff and return the set of changed file paths.
+ */
+function parseChangedPathsFromDiff(diff: string): string[] {
+  const paths = new Set<string>();
+  for (const line of diff.split("\n")) {
+    // Match "+++ b/src/foo.ts" lines
+    const m = line.match(/^\+\+\+ b\/(.+)/);
+    if (m?.[1] && m[1] !== "/dev/null") {
+      paths.add(m[1].trim());
+    }
+  }
+  return [...paths];
+}
+
+/**
+ * Given a list of changed file paths, find supporting context files that are
+ * closely related (imported by or importing changed files).
+ * Returns at most `maxFiles` file paths.
+ */
+async function findContextFiles(
+  changedPaths: string[],
+  allTrackedFiles: string[],
+  cwd: string,
+  maxFiles = 8
+): Promise<string[]> {
+  const contextPaths = new Set<string>();
+
+  for (const changedPath of changedPaths.slice(0, 10)) {
+    const content = await readRepoFile(changedPath, cwd);
+    if (!content) continue;
+
+    // Extract relative import paths from TypeScript/JS files
+    const importMatches = content.matchAll(/from\s+['"]([^'"]+)['"]/g);
+    for (const [, importPath] of importMatches) {
+      if (!importPath || importPath.startsWith("node:") || !importPath.startsWith(".")) continue;
+      // Resolve the import path relative to the file's directory
+      const dir = changedPath.split("/").slice(0, -1).join("/");
+      const candidates = [
+        `${dir}/${importPath}.ts`,
+        `${dir}/${importPath}.tsx`,
+        `${dir}/${importPath}/index.ts`,
+        `${dir}/${importPath}`,
+      ].map((p) => p.replace(/\/\//g, "/").replace(/^\//, ""));
+
+      for (const candidate of candidates) {
+        if (allTrackedFiles.includes(candidate) && !changedPaths.includes(candidate)) {
+          contextPaths.add(candidate);
+          break;
+        }
+      }
+    }
+
+    if (contextPaths.size >= maxFiles) break;
+  }
+
+  return [...contextPaths].slice(0, maxFiles);
+}
+
+/**
+ * Fetch a PR, its full diff, and all related codebase context;
+ * run a senior-developer quality AI review;
+ * submit as a formal review (with inline comments) to the hosting provider.
  */
 export async function runReviewWorkflow(
   gitx: Gitx,
@@ -30,32 +90,68 @@ export async function runReviewWorkflow(
 ): Promise<ReviewResult> {
   const ctx = await gitx.getRepoContext();
   const provider = createProvider(ctx);
+  const cwd = gitx.cwd;
 
   logger.info(`🔍 Fetching PR #${prNumber}…`);
   const pr = await provider.getPR(ctx.repoSlug, prNumber);
 
-  logger.info("💬 Fetching comments and diff…");
+  logger.info("💬 Fetching diff and comments…");
   const [comments, diff] = await Promise.all([
     provider.getPRComments(ctx.repoSlug, prNumber),
     provider.getPRDiff(ctx.repoSlug, prNumber),
   ]);
 
-  logger.info("🧠 Generating AI review…");
-  const review = await gitx.ai.reviewPR({
+  // ── Build codebase context ─────────────────────────────────────────────────
+  logger.info("📂 Building codebase context…");
+  const allTracked = await listTrackedFiles(cwd);
+  const changedPaths = parseChangedPathsFromDiff(diff);
+
+  // Read full content of changed files
+  const changedFiles: Record<string, string> = {};
+  for (const p of changedPaths.slice(0, 12)) {
+    const content = await readRepoFile(p, cwd);
+    if (content) changedFiles[p] = content;
+  }
+
+  // Read supporting context files (imported by the changed files)
+  const ctxPaths = await findContextFiles(changedPaths, allTracked, cwd, 8);
+  const contextFiles: Record<string, string> = {};
+  for (const p of ctxPaths) {
+    const content = await readRepoFile(p, cwd);
+    if (content) contextFiles[p] = content;
+  }
+
+  logger.info(
+    `🧠 Running senior-dev AI review (${changedPaths.length} changed files, ${ctxPaths.length} context files)…`
+  );
+
+  const review = await gitx.ai.reviewPRDetailed({
     prTitle: pr.title,
     prBody: pr.body,
+    author: pr.author,
+    headBranch: pr.head,
+    baseBranch: pr.base,
     diff,
-    comments: comments.map((c) => ({
-      body: c.body,
+    changedFiles,
+    contextFiles,
+    repoFileList: allTracked,
+    existingComments: comments.map((c) => ({
       author: c.author,
+      body: c.body,
       path: c.path,
+      line: c.line,
     })),
   });
 
-  // Build the review comment body
+  // ── Build the formatted review body (for the summary comment) ─────────────
   const verdictIcon =
     review.verdict === "approve" ? "✅" :
     review.verdict === "request_changes" ? "🔴" : "💬";
+
+  const checklistLines = review.checklist.map((c) => {
+    const icon = c.status === "pass" ? "✅" : c.status === "warn" ? "⚠️" : "❌";
+    return `| ${icon} | **${c.area}** | ${c.note} |`;
+  });
 
   const issueLines = review.issues.map((i) => {
     const sev = i.severity === "critical" ? "🔴" : i.severity === "warning" ? "🟡" : "💡";
@@ -65,25 +161,41 @@ export async function runReviewWorkflow(
 
   const posLines = review.positives.map((p) => `✔ ${p}`);
 
-  const commentBody = [
-    `## ${verdictIcon} AI Review (gitx) — ${review.verdict.replace("_", " ")}`,
+  const summaryBody = [
+    `## ${verdictIcon} Senior Dev AI Review (gitx) — ${review.verdict.replace("_", " ")}`,
     "",
     review.summary,
-    ...(review.issues.length > 0 ? ["", "### Issues", ...issueLines] : []),
+    ...(checklistLines.length > 0
+      ? ["", "### Review Checklist", "| Status | Area | Note |", "|--------|------|------|", ...checklistLines]
+      : []),
+    ...(review.issues.length > 0 ? ["", "### Issues Found", ...issueLines] : []),
     ...(review.positives.length > 0 ? ["", "### Positives", ...posLines] : []),
+    ...(review.testingNotes ? ["", "### How to Test", review.testingNotes] : []),
+    ...(review.inlineComments.length > 0
+      ? [`\n> 💬 ${review.inlineComments.length} inline comment(s) posted on specific lines.`]
+      : []),
     "",
     "*Generated by [gitx](https://github.com/g-abhishek/gitx)*",
   ].join("\n");
 
-  const aiSummary = commentBody;
-
+  // ── Post the formal review (inline comments + verdict) ────────────────────
   if (postComment) {
-    logger.info("📝 Posting AI review comment…");
-    await provider.addPRComment(ctx.repoSlug, prNumber, commentBody);
-    logger.success("Review comment posted.");
+    logger.info("📝 Submitting formal PR review with inline comments…");
+    await provider.submitPRReview(ctx.repoSlug, prNumber, {
+      body: summaryBody,
+      event: review.verdict,
+      comments: review.inlineComments.map((c) => ({
+        path: c.path,
+        line: c.line,
+        body: c.suggestion
+          ? `${c.body}\n\n**Suggestion:**\n\`\`\`suggestion\n${c.suggestion}\n\`\`\``
+          : c.body,
+      })),
+    });
+    logger.success("Review submitted to PR.");
   }
 
-  return { pr, comments, aiSummary, review };
+  return { pr, comments, aiSummary: summaryBody, review };
 }
 
 // ─── Fix-comments workflow ────────────────────────────────────────────────────

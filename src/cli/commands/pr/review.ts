@@ -5,10 +5,11 @@ import { runReviewWorkflow } from "../../../workflows/pr.js";
 
 export function registerPrReviewCommand(pr: Command): void {
   pr.command("review")
-    .description("🧐 AI-powered pull request review")
+    .description("🧐 Senior-dev AI review: inline comments, checklist, verdict")
     .argument("<id>", "Pull request number")
     .option("--no-comment", "Show review locally only — do not post to PR")
-    .action(async (id: string, options: { comment: boolean }) => {
+    .option("--no-inline", "Post overall review but skip inline file comments")
+    .action(async (id: string, options: { comment: boolean; inline: boolean }) => {
       const prNumber = parseInt(id, 10);
       if (isNaN(prNumber) || prNumber <= 0) {
         logger.error(`Invalid PR number: ${id}`);
@@ -16,68 +17,122 @@ export function registerPrReviewCommand(pr: Command): void {
       }
 
       const gitx = await Gitx.fromCwd();
-      const ctx = await gitx.getRepoContext();
 
-      // ── AI availability warning ────────────────────────────────────────────
-      if (!process.env["ANTHROPIC_API_KEY"]) {
+      if (!Gitx.isAiAvailable(gitx.config)) {
         logger.warn(
-          "⚠️  ANTHROPIC_API_KEY is not set — AI review will not be meaningful.\n" +
-          "   Export it first: export ANTHROPIC_API_KEY=sk-ant-..."
+          "⚠️  No AI provider configured — review will not be meaningful.\n" +
+          "   Run: gitx config set anthropic   (or openai / claude-cli)"
         );
         return;
       }
 
       const postComment = options.comment !== false;
-      logger.info(`🧐 Reviewing PR #${prNumber} on ${ctx.repoSlug}…\n`);
 
-      const result = await runReviewWorkflow(gitx, prNumber, postComment);
-      const review = result.review;
+      logger.info(`\n🧐 Running senior-dev AI review on PR #${prNumber}…\n`);
 
-      // ── PR info ───────────────────────────────────────────────────────────
-      logger.info(`📋 ${result.pr.title}`);
-      logger.info(`   ${result.pr.head} → ${result.pr.base}  ·  by ${result.pr.author}  ·  ${result.pr.state}`);
-      logger.info(`   ${result.pr.url}\n`);
+      let result: Awaited<ReturnType<typeof runReviewWorkflow>>;
+      try {
+        result = await runReviewWorkflow(gitx, prNumber, postComment);
+      } catch (err) {
+        logger.error(`Review failed: ${String((err as Error).message ?? err)}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const { pr: pullReq, review, comments } = result;
+
+      // ── PR header ─────────────────────────────────────────────────────────
+      logger.info(`\n📋  ${pullReq.title}`);
+      logger.info(`    ${pullReq.head} → ${pullReq.base}  ·  by ${pullReq.author}  ·  ${pullReq.state}`);
+      logger.info(`    ${pullReq.url}\n`);
 
       if (!review) {
         logger.info(`🤖 Review:\n${result.aiSummary}`);
         return;
       }
 
-      // ── Structured review output ──────────────────────────────────────────
+      // ── Verdict ───────────────────────────────────────────────────────────
       const verdictIcon =
-        review.verdict === "approve" ? "✅ Approve" :
-        review.verdict === "request_changes" ? "🔴 Request Changes" : "💬 Comment";
+        review.verdict === "approve"
+          ? "✅  APPROVE"
+          : review.verdict === "request_changes"
+          ? "🔴  REQUEST CHANGES"
+          : "💬  COMMENT";
 
-      logger.info(`🤖 AI Verdict: ${verdictIcon}\n`);
-      logger.info(`📝 ${review.summary}\n`);
+      logger.info(`🤖 Verdict: ${verdictIcon}\n`);
+
+      // ── Summary ───────────────────────────────────────────────────────────
+      logger.info(`📝 Summary:\n   ${review.summary.replace(/\n/g, "\n   ")}\n`);
+
+      // ── Checklist ─────────────────────────────────────────────────────────
+      if (review.checklist.length > 0) {
+        logger.info("✅ Review Checklist:");
+        for (const item of review.checklist) {
+          const icon = item.status === "pass" ? "✅" : item.status === "warn" ? "⚠️ " : "❌";
+          logger.info(`   ${icon}  ${item.area.padEnd(20)} ${item.note}`);
+        }
+        logger.info("");
+      }
+
+      // ── Issues ────────────────────────────────────────────────────────────
+      const criticals = review.issues.filter((i) => i.severity === "critical");
+      const warnings  = review.issues.filter((i) => i.severity === "warning");
+      const suggestions = review.issues.filter((i) => i.severity === "suggestion");
 
       if (review.issues.length > 0) {
         logger.info(`🔎 Issues (${review.issues.length}):`);
-        review.issues.forEach((issue) => {
+        for (const issue of [...criticals, ...warnings, ...suggestions]) {
           const icon = issue.severity === "critical" ? "🔴" : issue.severity === "warning" ? "🟡" : "💡";
           const loc = issue.file ? `  [${issue.file}${issue.line ? `:${issue.line}` : ""}]` : "";
-          logger.info(`  ${icon} ${issue.description}${loc}`);
-        });
+          logger.info(`   ${icon} ${issue.description}${loc}`);
+        }
         logger.info("");
       }
 
+      // ── Inline comments ───────────────────────────────────────────────────
+      if (review.inlineComments.length > 0) {
+        logger.info(`💬 Inline Comments (${review.inlineComments.length}):`);
+        for (const c of review.inlineComments) {
+          const icon = c.severity === "critical" ? "🔴" : c.severity === "warning" ? "🟡" : "💡";
+          logger.info(`\n   ${icon} ${c.path}:${c.line}`);
+          logger.info(`      ${c.body.replace(/\n/g, "\n      ")}`);
+          if (c.suggestion) {
+            logger.info(`      📌 Suggestion: ${c.suggestion.split("\n")[0]}…`);
+          }
+        }
+        logger.info("");
+      }
+
+      // ── Positives ─────────────────────────────────────────────────────────
       if (review.positives.length > 0) {
-        logger.info(`👍 Positives:`);
-        review.positives.forEach((p) => logger.info(`  ✔ ${p}`));
+        logger.info("👍 Positives:");
+        for (const p of review.positives) logger.info(`   ✔  ${p}`);
         logger.info("");
       }
 
-      if (result.comments.length > 0) {
-        logger.info(`💬 Existing comments (${result.comments.length}):`);
-        result.comments.slice(0, 3).forEach((c) => {
+      // ── Testing notes ─────────────────────────────────────────────────────
+      if (review.testingNotes) {
+        logger.info(`🧪 How to test:\n   ${review.testingNotes.replace(/\n/g, "\n   ")}\n`);
+      }
+
+      // ── Existing PR comments ──────────────────────────────────────────────
+      if (comments.length > 0) {
+        logger.info(`💬 Existing comments on PR (${comments.length}):`);
+        for (const c of comments.slice(0, 4)) {
           const loc = c.path ? ` @ ${c.path}${c.line ? `:${c.line}` : ""}` : "";
-          logger.info(`  [${c.author}${loc}]: ${c.body.slice(0, 100)}${c.body.length > 100 ? "…" : ""}`);
-        });
+          logger.info(
+            `   [${c.author}${loc}]: ${c.body.slice(0, 120)}${c.body.length > 120 ? "…" : ""}`
+          );
+        }
+        if (comments.length > 4) logger.info(`   … and ${comments.length - 4} more.`);
         logger.info("");
       }
 
+      // ── Status ────────────────────────────────────────────────────────────
       if (postComment) {
-        logger.success("✅ AI review posted to PR.");
+        logger.success(
+          `✅ Review submitted to PR with ${review.inlineComments.length} inline comment(s).`
+        );
       } else {
         logger.info("ℹ️  Review shown locally only (--no-comment).");
       }

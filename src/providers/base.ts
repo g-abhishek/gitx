@@ -40,6 +40,26 @@ export interface CreatePrOptions {
   draft?: boolean;
 }
 
+/** A single inline review comment tied to a specific file + line. */
+export interface ReviewComment {
+  /** Relative file path */
+  path: string;
+  /** Line number in the NEW version of the file (right side) */
+  line: number;
+  /** Markdown comment body */
+  body: string;
+}
+
+/** Options for submitting a formal PR review (with optional inline comments). */
+export interface SubmitReviewOptions {
+  /** Overall review body (markdown) */
+  body: string;
+  /** Review verdict */
+  event: "approve" | "request_changes" | "comment";
+  /** Inline file+line comments to post */
+  comments?: ReviewComment[];
+}
+
 export interface MergePrOptions {
   /** How to merge. Providers map this to their own enum. Default: "squash" */
   method: "squash" | "merge" | "rebase";
@@ -82,4 +102,11 @@ export interface GitProvider {
 
   /** Merge a pull request using the specified strategy. */
   mergePR(repoSlug: string, prNumber: number, opts: MergePrOptions): Promise<void>;
+
+  /**
+   * Submit a formal review (approve / request_changes / comment) with optional
+   * inline file-level comments. Falls back to a plain comment if the provider
+   * does not support formal reviews.
+   */
+  submitPRReview(repoSlug: string, prNumber: number, opts: SubmitReviewOptions): Promise<void>;
 }

@@ -7,6 +7,8 @@ import type {
   MergePrOptions,
   PullRequest,
   PullRequestComment,
+  ReviewComment,
+  SubmitReviewOptions,
 } from "./base.js";
 
 // ─── Raw GitHub API shapes ────────────────────────────────────────────────────
@@ -165,6 +167,56 @@ export class GitHubProvider implements GitProvider {
       await this.http.patch(`/repos/${repoSlug}/pulls/${prNumber}`, { state: "closed" });
     } catch (err) {
       throw wrapGhError(err, `close PR #${prNumber}`);
+    }
+  }
+
+  async submitPRReview(repoSlug: string, prNumber: number, opts: SubmitReviewOptions): Promise<void> {
+    // Map our event string to GitHub's enum
+    const eventMap: Record<SubmitReviewOptions["event"], string> = {
+      approve: "APPROVE",
+      request_changes: "REQUEST_CHANGES",
+      comment: "COMMENT",
+    };
+
+    // Build inline comments — GitHub requires `line` + `side` (newer diff hunk API)
+    // We use `line` (actual line in the new file) + `side: "RIGHT"`.
+    const ghComments = (opts.comments ?? [])
+      .filter((c) => c.line > 0)
+      .map((c: ReviewComment) => ({
+        path: c.path,
+        line: c.line,
+        side: "RIGHT" as const,
+        body: c.body,
+      }));
+
+    try {
+      await this.http.post(`/repos/${repoSlug}/pulls/${prNumber}/reviews`, {
+        body: opts.body,
+        event: eventMap[opts.event],
+        comments: ghComments,
+      });
+    } catch (err) {
+      // Inline comments can fail if line numbers are off (e.g. line not in diff).
+      // Fall back to a plain issue comment so the review is never silently lost.
+      if (isAxiosError(err) && err.response?.status === 422 && ghComments.length > 0) {
+        // Retry without inline comments
+        try {
+          await this.http.post(`/repos/${repoSlug}/pulls/${prNumber}/reviews`, {
+            body: opts.body,
+            event: eventMap[opts.event],
+            comments: [],
+          });
+          // Post inline comments individually as plain comments
+          for (const c of ghComments) {
+            const fallback = `**\`${c.path}:${c.line}\`**\n\n${c.body}`;
+            await this.http.post(`/repos/${repoSlug}/issues/${prNumber}/comments`, { body: fallback }).catch(() => {});
+          }
+          return;
+        } catch {
+          // ignore secondary failure
+        }
+      }
+      throw wrapGhError(err, `submit review on PR #${prNumber}`);
     }
   }
 

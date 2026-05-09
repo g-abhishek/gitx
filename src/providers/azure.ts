@@ -7,6 +7,7 @@ import type {
   MergePrOptions,
   PullRequest,
   PullRequestComment,
+  SubmitReviewOptions,
 } from "./base.js";
 
 /**
@@ -243,6 +244,43 @@ export class AzureProvider implements GitProvider {
       );
     } catch (err) {
       throw wrapAzError(err, `abandon PR #${prNumber}`);
+    }
+  }
+
+  async submitPRReview(_repoSlug: string, prNumber: number, opts: SubmitReviewOptions): Promise<void> {
+    const verdictPrefix =
+      opts.event === "approve" ? "✅ APPROVED" :
+      opts.event === "request_changes" ? "🔴 CHANGES REQUESTED" : "💬 REVIEW";
+
+    try {
+      // Post the summary as a PR thread
+      await this.http.post(
+        `/git/repositories/${this.repoName}/pullrequests/${prNumber}/threads`,
+        {
+          comments: [{ parentCommentId: 0, content: `${verdictPrefix}\n\n${opts.body}`, commentType: 1 }],
+          status: 1,
+        },
+        { params: this.apiParams() }
+      );
+
+      // Post inline comments as file-level threads
+      for (const c of opts.comments ?? []) {
+        await this.http.post(
+          `/git/repositories/${this.repoName}/pullrequests/${prNumber}/threads`,
+          {
+            comments: [{ parentCommentId: 0, content: c.body, commentType: 1 }],
+            threadContext: {
+              filePath: `/${c.path}`,
+              rightFileStart: { line: c.line, offset: 1 },
+              rightFileEnd: { line: c.line, offset: 120 },
+            },
+            status: 1,
+          },
+          { params: this.apiParams() }
+        ).catch(() => {});
+      }
+    } catch (err) {
+      throw wrapAzError(err, `submit review on PR #${prNumber}`);
     }
   }
 

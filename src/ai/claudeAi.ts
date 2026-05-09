@@ -417,7 +417,6 @@ Respond with ONLY valid JSON (no markdown fences):
     };
   }
 
-<<<<<<< HEAD
   async resolveConflict(filePath: string, conflictContent: string): Promise<import("./types.js").AiConflictResolutionResponse> {
     const system = `You are an expert software engineer resolving git merge conflicts.
 
@@ -450,8 +449,6 @@ Respond with ONLY valid JSON (no markdown fences):
     };
   }
 
-=======
->>>>>>> origin/main
   async generateCommitMessage(diff: string): Promise<import("./types.js").AiCommitMessageResponse> {
     const system = `You are an expert software engineer writing git commit messages.
 You receive either a plain unified diff OR a structured input with:
@@ -481,5 +478,18 @@ Respond with ONLY valid JSON (no markdown fences):
       subject: parsed.subject?.trim() ?? "chore: update files",
       body: parsed.body?.trim() || undefined,
     };
+  }
+
+  async reviewPRDetailed(
+    context: Parameters<import("./types.js").AiClient["reviewPRDetailed"]>[0]
+  ): Promise<import("./types.js").AiDetailedReviewResponse> {
+    const { buildSeniorReviewSystem, buildSeniorReviewPrompt, parseSeniorReview } = await import("./reviewHelpers.js");
+    const text = await callClaude(
+      buildSeniorReviewSystem(),
+      buildSeniorReviewPrompt(context),
+      this.apiKey,
+      this.model
+    );
+    return parseSeniorReview(text);
   }
 }

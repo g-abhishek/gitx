@@ -79,4 +79,18 @@ export class MockAi implements AiClient {
       explanation: `AI conflict resolution is not available (no AI provider configured). Please resolve ${filePath} manually.`,
     };
   }
+
+  async reviewPRDetailed(
+    _context: Parameters<import("./types.js").AiClient["reviewPRDetailed"]>[0]
+  ): Promise<import("./types.js").AiDetailedReviewResponse> {
+    return {
+      summary: "AI PR review is not available (no AI provider configured). Set ANTHROPIC_API_KEY and retry.",
+      verdict: "comment",
+      issues: [],
+      inlineComments: [],
+      positives: [],
+      testingNotes: "Test the changes manually.",
+      checklist: [],
+    };
+  }
 }
