@@ -26,12 +26,14 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
-import { confirm } from "@inquirer/prompts";
+import { confirm, select } from "@inquirer/prompts";
 import { logger } from "../../logger/logger.js";
 import { getCurrentBranch, detectBaseBranch } from "../../utils/gitOps.js";
 import { isInsideGitRepo } from "../../utils/git.js";
 import { GitxError } from "../../utils/errors.js";
 import { Gitx } from "../../core/gitx.js";
+import { createProvider } from "../../providers/factory.js";
+import { runAddressWorkflow } from "../../workflows/prAddress.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -376,9 +378,96 @@ export function registerSyncCommand(program: Command): void {
           : `Merged origin/${base} into ${head} ✓`
       );
 
+      // ── Check for unresolved PR comments before pushing ────────────────────
+      // If the current branch has an open PR with unresolved inline review
+      // comments, surface them now so the author can address them before push.
+      await checkAndOfferAddressComments(cwd);
+
       // Rebase rewrites history → force-with-lease; merge → plain push
       await pushAfterSync(cwd, strategy === "rebase");
     });
+}
+
+/**
+ * Look up any open PR for the current branch.
+ * If it has unresolved inline review comments, ask the user whether to
+ * address them now (before pushing) or skip and push immediately.
+ */
+async function checkAndOfferAddressComments(cwd: string): Promise<void> {
+  let gitx: Gitx | null = null;
+  try {
+    gitx = await Gitx.fromCwd(cwd);
+    if (!Gitx.isAiAvailable(gitx.config)) return;
+  } catch {
+    return; // no gitx config — skip silently
+  }
+
+  let prNumber: number | null = null;
+  let unresolvedCount = 0;
+
+  try {
+    const ctx = await gitx.getRepoContext();
+    const provider = createProvider(ctx);
+
+    // Find the open PR for the current branch
+    const prs = await provider.listPRs(ctx.repoSlug);
+    const currentBranch = await getCurrentBranch(cwd);
+    const openPr = prs.find((p) => p.head === currentBranch && p.state === "open");
+    if (!openPr) return;
+
+    prNumber = openPr.number;
+
+    // Count inline review comments (excluding bot replies)
+    const allComments = await provider.getPRComments(ctx.repoSlug, prNumber);
+    const botPrefixes = ["🤖", "✅ Addressed", "📍", "*(in reply to"];
+    unresolvedCount = allComments.filter(
+      (c) => c.path && c.line && c.line > 0 &&
+             !botPrefixes.some((p) => c.body.trimStart().startsWith(p))
+    ).length;
+
+    if (unresolvedCount === 0) return;
+  } catch {
+    return; // provider error — don't block the sync
+  }
+
+  // Surface the prompt
+  logger.info(`\n💬 PR #${prNumber} has ${unresolvedCount} unresolved review comment(s).`);
+
+  let choice: string;
+  try {
+    choice = await select({
+      message: "Address them before pushing?",
+      choices: [
+        { name: `Address now  (AI generates fixes, you approve each one)`,       value: "address" },
+        { name: `Address locally  (apply fixes, I'll push manually)`,            value: "address-local" },
+        { name: `Skip  (push now, address comments later)`,                      value: "skip" },
+      ],
+    });
+  } catch {
+    return; // Ctrl-C → skip
+  }
+
+  if (choice === "skip") return;
+
+  logger.info(`\n🔧 Addressing review comments on PR #${prNumber}…\n`);
+  try {
+    const result = await runAddressWorkflow(gitx!, prNumber, {
+      mode: choice === "address-local" ? "no-push" : "interactive",
+    });
+
+    const applied = result.addressed.filter((a) => a.applied).length;
+    if (applied > 0) {
+      logger.success(`✅ ${applied} fix(es) applied.`);
+      if (result.pushed) {
+        logger.success(`🚀 Already pushed by address workflow — skipping duplicate push.`);
+        // Signal to the caller that we already pushed
+        (checkAndOfferAddressComments as { alreadyPushed?: boolean }).alreadyPushed = result.pushed;
+      }
+      if (result.repliedCount) logger.success(`💬 Replied to ${result.repliedCount} thread(s).`);
+    }
+  } catch (err) {
+    logger.warn(`⚠️  Address workflow error: ${(err as Error).message} — continuing with push.`);
+  }
 }
 
 async function pushAfterSync(cwd: string, forceWithLease = false): Promise<void> {

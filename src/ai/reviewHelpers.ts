@@ -6,7 +6,7 @@
  * parseSeniorReview()        — safely parses the AI JSON response
  */
 
-import type { AiDetailedReviewResponse } from "./types.js";
+import type { AiDetailedReviewResponse, AiFixResponse } from "./types.js";
 
 // ─── System prompt ────────────────────────────────────────────────────────────
 
@@ -346,4 +346,133 @@ export function parseSeniorReview(text: string): AiDetailedReviewResponse {
     testingNotes: parsed.testingNotes ?? "",
     checklist: Array.isArray(parsed.checklist) ? parsed.checklist : [],
   };
+}
+
+// ─── Fix generation helpers ───────────────────────────────────────────────────
+
+/**
+ * System prompt for the AI fix generator.
+ * Instructs the model to produce a minimal, targeted line-range replacement.
+ */
+export function buildFixSystem(): string {
+  return `You are a senior developer addressing a pull request review comment.
+Your job is to generate the MINIMAL code change that addresses the reviewer's concern.
+
+Rules:
+- Change as few lines as possible — do not refactor surrounding code
+- Preserve the existing indentation style exactly
+- If the comment is a question or discussion (no code change needed), set isDiscussion: true
+- If you are unsure of the correct fix, set confidence: "low"
+- startLine and endLine are 1-based, inclusive line numbers in the CURRENT file
+
+Respond with ONLY valid JSON (no markdown fences, no prose outside JSON):
+{
+  "file": "<relative file path>",
+  "startLine": <1-based line where replacement starts>,
+  "endLine": <1-based line where replacement ends, inclusive>,
+  "replacement": "<new code lines, newline-separated, preserving indentation>",
+  "explanation": "<one sentence: what you changed and why>",
+  "confidence": "high|low",
+  "resolves": true|false,
+  "isDiscussion": true|false
+}`;
+}
+
+/**
+ * Build the user prompt for a single fix request.
+ * Includes the comment, file content with line numbers, and the relevant diff.
+ */
+export function buildFixPrompt(ctx: {
+  comment: string;
+  commentAuthor: string;
+  filePath: string;
+  line: number;
+  fileContent: string;
+  fileDiff: string;
+}): string {
+  const lines = ctx.fileContent.split("\n");
+
+  // Show a window of ±30 lines around the commented line (with real line numbers)
+  const windowStart = Math.max(1, ctx.line - 30);
+  const windowEnd   = Math.min(lines.length, ctx.line + 30);
+  const excerpt = lines
+    .slice(windowStart - 1, windowEnd)
+    .map((l, i) => `${String(windowStart + i).padStart(4, " ")} | ${l}`)
+    .join("\n");
+
+  const diffSection = ctx.fileDiff.length > 3000
+    ? ctx.fileDiff.slice(0, 3000) + "\n... (diff truncated)"
+    : ctx.fileDiff;
+
+  return `## Review Comment
+Author: ${ctx.commentAuthor}
+File: ${ctx.filePath}  ·  Line: ${ctx.line}
+
+> ${ctx.comment.replace(/\n/g, "\n> ")}
+
+## File Context (lines ${windowStart}–${windowEnd} of ${lines.length})
+\`\`\`
+${excerpt}
+\`\`\`
+
+## Diff for this file
+\`\`\`diff
+${diffSection}
+\`\`\`
+
+Generate the fix JSON now.`;
+}
+
+/**
+ * Safely parse the AI response for a fix request.
+ * Returns a safe fallback (isDiscussion + low confidence) on parse failure.
+ */
+export function parseFixResponse(text: string, filePath: string, line: number): AiFixResponse {
+  try {
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("no JSON found");
+    const parsed = JSON.parse(jsonMatch[0]) as Partial<AiFixResponse>;
+
+    if (parsed.isDiscussion) {
+      return {
+        file: parsed.file ?? filePath,
+        startLine: line,
+        endLine: line,
+        replacement: "",
+        explanation: parsed.explanation ?? "This comment is a discussion — no code change needed.",
+        confidence: "low",
+        resolves: parsed.resolves ?? false,
+        isDiscussion: true,
+      };
+    }
+
+    // Validate required fields; fall back to low confidence if anything is off
+    const hasReplacement = typeof parsed.replacement === "string";
+    const hasLines = typeof parsed.startLine === "number" && typeof parsed.endLine === "number";
+    if (!hasReplacement || !hasLines) {
+      throw new Error("missing required fields");
+    }
+
+    return {
+      file: parsed.file ?? filePath,
+      startLine: parsed.startLine!,
+      endLine: parsed.endLine!,
+      replacement: parsed.replacement!,
+      explanation: parsed.explanation ?? "AI-generated fix.",
+      confidence: parsed.confidence === "high" ? "high" : "low",
+      resolves: parsed.resolves ?? false,
+      isDiscussion: false,
+    };
+  } catch {
+    return {
+      file: filePath,
+      startLine: line,
+      endLine: line,
+      replacement: "",
+      explanation: "AI could not generate a fix for this comment.",
+      confidence: "low",
+      resolves: false,
+      isDiscussion: true, // treat parse failure as discussion → no code change
+    };
+  }
 }

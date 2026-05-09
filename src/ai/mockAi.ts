@@ -93,4 +93,19 @@ export class MockAi implements AiClient {
       checklist: [],
     };
   }
+
+  async generateFix(
+    context: Parameters<import("./types.js").AiClient["generateFix"]>[0]
+  ): Promise<import("./types.js").AiFixResponse> {
+    return {
+      file: context.filePath,
+      startLine: context.line,
+      endLine: context.line,
+      replacement: "",
+      explanation: "AI fix generation is not available (no AI provider configured).",
+      confidence: "low",
+      resolves: false,
+      isDiscussion: true,
+    };
+  }
 }

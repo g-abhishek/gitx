@@ -492,4 +492,17 @@ Respond with ONLY valid JSON (no markdown fences):
     );
     return parseSeniorReview(text);
   }
+
+  async generateFix(
+    context: Parameters<import("./types.js").AiClient["generateFix"]>[0]
+  ): Promise<import("./types.js").AiFixResponse> {
+    const { buildFixSystem, buildFixPrompt, parseFixResponse } = await import("./reviewHelpers.js");
+    const text = await callClaude(
+      buildFixSystem(),
+      buildFixPrompt(context),
+      this.apiKey,
+      this.model
+    );
+    return parseFixResponse(text, context.filePath, context.line);
+  }
 }

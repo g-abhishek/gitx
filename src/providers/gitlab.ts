@@ -195,6 +195,19 @@ export class GitLabProvider implements GitProvider {
     }
   }
 
+  async replyToComment(repoSlug: string, prNumber: number, commentId: number, body: string): Promise<void> {
+    try {
+      // GitLab: add a note to the MR (thread replies require discussion IDs which we don't store)
+      const replyBody = `*(in reply to comment #${commentId})*\n\n${body}`;
+      await this.http.post(
+        `/projects/${this.enc(repoSlug)}/merge_requests/${prNumber}/notes`,
+        { body: replyBody }
+      );
+    } catch (err) {
+      throw wrapGlError(err, `reply to comment #${commentId}`);
+    }
+  }
+
   async getDefaultBranch(repoSlug: string): Promise<string> {
     try {
       const { data } = await withRetry(() =>

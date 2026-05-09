@@ -284,6 +284,24 @@ export class AzureProvider implements GitProvider {
     }
   }
 
+  async replyToComment(_repoSlug: string, prNumber: number, commentId: number, body: string): Promise<void> {
+    try {
+      // Azure DevOps: add a comment to an existing thread
+      // We don't have the threadId stored separately, so post a new general comment
+      const replyBody = `*(in reply to comment #${commentId})*\n\n${body}`;
+      await this.http.post(
+        `/git/repositories/${this.repoName}/pullRequests/${prNumber}/threads`,
+        {
+          comments: [{ parentCommentId: 0, content: replyBody, commentType: 1 }],
+          status: 4, // Fixed
+        },
+        { params: this.apiParams() }
+      );
+    } catch (err) {
+      throw wrapAzError(err, `reply to comment #${commentId}`);
+    }
+  }
+
   async getDefaultBranch(_repoSlug: string): Promise<string> {
     try {
       const { data } = await this.http.get<AzRepo>(

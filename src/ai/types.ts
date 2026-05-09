@@ -56,6 +56,38 @@ export interface AiConflictResolutionResponse {
   explanation: string;
 }
 
+/**
+ * AI-generated fix for a single PR review comment.
+ * Targets a specific line range in a file with a minimal replacement.
+ */
+export interface AiFixResponse {
+  /** Relative path to the file that needs to change */
+  file: string;
+  /** 1-based line number where the replacement starts */
+  startLine: number;
+  /** 1-based line number where the replacement ends (inclusive) */
+  endLine: number;
+  /**
+   * The new code to replace lines startLine–endLine with.
+   * Must preserve surrounding indentation style.
+   */
+  replacement: string;
+  /** One-sentence explanation shown to the user */
+  explanation: string;
+  /**
+   * "high" → safe to auto-apply without confirmation.
+   * "low"  → show diff and ask user before applying.
+   */
+  confidence: "high" | "low";
+  /** Does this fix fully resolve the comment (vs partially)? */
+  resolves: boolean;
+  /**
+   * true when the comment is a question / discussion with no code change needed.
+   * In this case startLine/endLine/replacement are empty and should be ignored.
+   */
+  isDiscussion: boolean;
+}
+
 export interface AiClient {
   analyzeTask(input: string): Promise<AiAnalyzeTaskResponse>;
   generatePlan(context: unknown): Promise<AiGeneratePlanResponse>;
@@ -72,6 +104,25 @@ export interface AiClient {
    * Returns the fully resolved file content + confidence level.
    */
   resolveConflict(filePath: string, conflictContent: string): Promise<AiConflictResolutionResponse>;
+
+  /**
+   * Generate a targeted fix for a single PR review comment.
+   * Returns a line-range replacement (startLine–endLine → replacement).
+   */
+  generateFix(context: {
+    /** The review comment text to address */
+    comment: string;
+    /** Author of the comment */
+    commentAuthor: string;
+    /** Relative file path the comment is on */
+    filePath: string;
+    /** 1-based line number the comment targets */
+    line: number;
+    /** Full current file content (after PR changes) */
+    fileContent: string;
+    /** The relevant diff section for this file */
+    fileDiff: string;
+  }): Promise<AiFixResponse>;
 
   /**
    * Senior-developer quality PR review with full codebase context.

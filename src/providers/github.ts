@@ -238,6 +238,20 @@ export class GitHubProvider implements GitProvider {
     }
   }
 
+  async replyToComment(repoSlug: string, prNumber: number, commentId: number, body: string): Promise<void> {
+    try {
+      // GitHub REST: reply directly to a pull request review comment thread
+      await this.http.post(
+        `/repos/${repoSlug}/pulls/${prNumber}/comments/${commentId}/replies`,
+        { body }
+      );
+    } catch {
+      // Fallback: post as a plain issue comment if the thread reply fails
+      await this.http.post(`/repos/${repoSlug}/issues/${prNumber}/comments`, { body })
+        .catch((e: unknown) => { throw wrapGhError(e, `reply to comment #${commentId}`); });
+    }
+  }
+
   async getDefaultBranch(repoSlug: string): Promise<string> {
     try {
       const { data } = await withRetry(() => this.http.get<GhRepo>(`/repos/${repoSlug}`));

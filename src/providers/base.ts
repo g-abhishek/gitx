@@ -109,4 +109,10 @@ export interface GitProvider {
    * does not support formal reviews.
    */
   submitPRReview(repoSlug: string, prNumber: number, opts: SubmitReviewOptions): Promise<void>;
+
+  /**
+   * Reply to a specific review comment thread (to mark it as addressed).
+   * Falls back to a general PR comment if thread replies aren't supported.
+   */
+  replyToComment(repoSlug: string, prNumber: number, commentId: number, body: string): Promise<void>;
 }
