@@ -30,6 +30,13 @@ export interface AiSuggestFixesResponse {
   suggestedEdits: Array<{ path: string; rationale: string; unifiedDiff: string }>;
 }
 
+export interface AiCommitMessageResponse {
+  /** Full conventional commit subject line, e.g. "feat(auth): add OAuth2 login flow" */
+  subject: string;
+  /** Optional multi-line body explaining WHY the change was made */
+  body?: string;
+}
+
 export interface AiClient {
   analyzeTask(input: string): Promise<AiAnalyzeTaskResponse>;
   generatePlan(context: unknown): Promise<AiGeneratePlanResponse>;
@@ -37,6 +44,8 @@ export interface AiClient {
   summarizeChanges(diff: unknown): Promise<AiSummarizeChangesResponse>;
   suggestFixes(comment: unknown): Promise<AiSuggestFixesResponse>;
   reviewPR(context: unknown): Promise<AiReviewPRResponse>;
+  /** Generate a conventional commit message from a unified diff. */
+  generateCommitMessage(diff: string): Promise<AiCommitMessageResponse>;
 }
 
 export interface AiReviewPRResponse {

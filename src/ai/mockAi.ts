@@ -1,6 +1,7 @@
 import type {
   AiAnalyzeTaskResponse,
   AiClient,
+  AiCommitMessageResponse,
   AiGenerateDiffsResponse,
   AiGeneratePlanResponse,
   AiReviewPRResponse,
@@ -54,6 +55,13 @@ export class MockAi implements AiClient {
       issues: [],
       positives: [],
       verdict: "comment",
+    };
+  }
+
+  async generateCommitMessage(_diff: string): Promise<AiCommitMessageResponse> {
+    return {
+      subject: "chore: update files",
+      body: undefined,
     };
   }
 }

@@ -1,15 +1,14 @@
 /**
- * gitx commit
+ * gitx push
  *
- * AI-powered commit: detects what changed, generates a meaningful
- * conventional-commit message, commits, and optionally pushes.
+ * The single-command workflow: stage everything → AI-generate a conventional
+ * commit message → commit → push to origin.  No flags needed.
  *
  * Usage:
- *   gitx commit                  # AI generates message, prompts to confirm
- *   gitx commit -m "fix: typo"   # use custom message, skip AI
- *   gitx commit --push           # commit + push in one step
- *   gitx commit --no-push        # commit only (default)
- *   gitx commit --dry-run        # preview message, do not commit
+ *   gitx push                  # full auto: stage + AI commit + push
+ *   gitx push -m "fix: typo"   # use a custom message, skip AI
+ *   gitx push --dry-run        # preview message without committing or pushing
+ *   gitx push --branch feat    # push to a specific branch instead of current
  */
 
 import type { Command } from "commander";
@@ -31,24 +30,21 @@ import { isInsideGitRepo } from "../../utils/git.js";
 import { GitxError } from "../../utils/errors.js";
 import { withLockRetry } from "../../utils/lockFile.js";
 
-export function registerCommitCommand(program: Command): void {
+export function registerPushCommand(program: Command): void {
   program
-    .command("commit")
-    .description("🤖 Stage, AI-generate a commit message, commit, and optionally push")
+    .command("push")
+    .description("🚀 Stage, AI-commit, and push to origin in one step")
     .option("-m, --message <msg>", "Use a custom commit message (skips AI generation)")
-    .option("--push", "Push to remote after committing")
-    .option("--no-push", "Commit only, do not push (default)")
-    .option("--dry-run", "Preview the commit message without committing")
-    .option("--all", "Stage all changes before committing (default: true)", true)
+    .option("--dry-run", "Preview the commit message without committing or pushing")
+    .option("-b, --branch <name>", "Push to this branch instead of the current branch")
     .action(async (opts: {
       message?: string;
-      push: boolean;
       dryRun?: boolean;
-      all: boolean;
+      branch?: string;
     }) => {
       const cwd = process.cwd();
 
-      // ── Guards ──────────────────────────────────────────────────────────
+      // ── Guards ─────────────────────────────────────────────────────────────
       if (!(await isInsideGitRepo(cwd))) {
         throw new GitxError("Not inside a git repository.", { exitCode: 2 });
       }
@@ -59,20 +55,18 @@ export function registerCommitCommand(program: Command): void {
         return;
       }
 
-      // ── Stage changes ────────────────────────────────────────────────────
-      if (opts.all) {
-        const stageSpinner = ora("Staging all changes…").start();
-        await withLockRetry(() => stageAll(cwd), cwd);
-        stageSpinner.succeed("All changes staged.");
-      }
+      // ── Stage all changes ──────────────────────────────────────────────────
+      const stageSpinner = ora("Staging all changes…").start();
+      await withLockRetry(() => stageAll(cwd), cwd);
+      stageSpinner.succeed("All changes staged.");
 
       const staged = await hasStagedChanges(cwd);
       if (!staged) {
-        logger.warn("No staged changes found. Use `git add` to stage files, or run without --no-all.");
+        logger.warn("No staged changes found after staging. Aborting.");
         return;
       }
 
-      // ── Get diff for AI ──────────────────────────────────────────────────
+      // ── Get diff for AI ────────────────────────────────────────────────────
       // stat = compact file list (always complete, never truncated)
       // diff = full patch (may be large — we truncate later in the AI call)
       const [stat, diff] = await Promise.all([
@@ -80,7 +74,7 @@ export function registerCommitCommand(program: Command): void {
         getWorkingDiff(cwd),
       ]);
 
-      // ── Generate or use custom message ───────────────────────────────────
+      // ── Generate or use custom commit message ──────────────────────────────
       let commitMsg: string;
 
       if (opts.message) {
@@ -113,7 +107,6 @@ export function registerCommitCommand(program: Command): void {
               : diff;
             const result = await gitx.ai.generateCommitMessage(aiInput);
 
-            // Use the AI-generated conventional commit subject + optional body as-is
             commitMsg = result.body
               ? `${result.subject}\n\n${result.body}`
               : result.subject;
@@ -137,14 +130,14 @@ export function registerCommitCommand(program: Command): void {
         }
       }
 
-      // ── Show preview and confirm ─────────────────────────────────────────
+      // ── Preview + confirm ──────────────────────────────────────────────────
       logger.info("\n📋 Commit message preview:\n");
       logger.info("─".repeat(60));
       logger.info(commitMsg);
       logger.info("─".repeat(60));
 
       if (opts.dryRun) {
-        logger.info("\n🔍 Dry run — nothing committed.");
+        logger.info("\n🔍 Dry run — nothing committed or pushed.");
         return;
       }
 
@@ -152,13 +145,13 @@ export function registerCommitCommand(program: Command): void {
         {
           type: "confirm",
           name: "confirmed",
-          message: "Commit with this message?",
+          message: "Commit and push with this message?",
           default: true,
         },
       ]);
 
       if (!confirmed) {
-        // Let user edit the message manually
+        // Give the user a chance to edit before we proceed
         const { editedMsg } = await inquirer.prompt<{ editedMsg: string }>([
           {
             type: "editor",
@@ -169,26 +162,22 @@ export function registerCommitCommand(program: Command): void {
         ]);
         commitMsg = editedMsg.trim();
         if (!commitMsg) {
-          logger.warn("Empty message — commit aborted.");
+          logger.warn("Empty message — aborted.");
           return;
         }
       }
 
-      // ── Commit ───────────────────────────────────────────────────────────
+      // ── Commit ─────────────────────────────────────────────────────────────
       const commitSpinner = ora("Committing…").start();
       await withLockRetry(() => commitChanges(commitMsg, cwd), cwd);
       commitSpinner.succeed("Committed ✓");
 
-      // ── Push ─────────────────────────────────────────────────────────────
-      if (opts.push) {
-        const branch = await getCurrentBranch(cwd);
-        const pushSpinner = ora(`Pushing ${branch} to origin…`).start();
-        await pushBranch(branch, cwd);
-        pushSpinner.succeed(`Pushed to origin/${branch} ✓`);
-        logger.success(`\n✅ Done! Changes committed and pushed.`);
-      } else {
-        logger.success(`\n✅ Done! Run \`gitx commit --push\` or \`git push\` to push.`);
-      }
+      // ── Push ───────────────────────────────────────────────────────────────
+      const branch = opts.branch ?? (await getCurrentBranch(cwd));
+      const pushSpinner = ora(`Pushing ${branch} to origin…`).start();
+      await pushBranch(branch, cwd);
+      pushSpinner.succeed(`Pushed to origin/${branch} ✓`);
+
+      logger.success(`\n✅ Done! Changes are live on origin/${branch}.`);
     });
 }
-

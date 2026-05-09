@@ -208,6 +208,22 @@ export async function getWorkingDiff(cwd = process.cwd()): Promise<string> {
 }
 
 /**
+ * Get a compact summary of staged changes (--stat format):
+ * lists every changed file with insertion/deletion counts.
+ * Always small regardless of diff size — used to give the AI the
+ * complete picture of what changed even when the full diff is truncated.
+ */
+export async function getWorkingDiffStat(cwd = process.cwd()): Promise<string> {
+  try {
+    const staged = await git(["diff", "--cached", "--stat"], cwd);
+    const unstaged = await git(["diff", "--stat"], cwd);
+    return [staged, unstaged].filter(Boolean).join("\n");
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Read file content as a string. Returns empty string if file doesn't exist.
  */
 export async function readRepoFile(

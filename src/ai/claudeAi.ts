@@ -392,4 +392,34 @@ PR Description: ${ctx.prBody ?? ""}${diffSection}${commentsSection}`;
     };
   }
 
+  async generateCommitMessage(diff: string): Promise<import("./types.js").AiCommitMessageResponse> {
+    const system = `You are an expert software engineer writing git commit messages.
+You receive either a plain unified diff OR a structured input with:
+  - "=== Changed files (complete list) ===" — the full --stat summary of every file touched
+  - "=== Detailed diff ===" — the actual patch (may be truncated for large changesets)
+
+When a file list is present, use it as the authoritative source of ALL changes.
+Do not ignore files that appear in the list but are missing from the truncated diff.
+
+Produce ONE CONVENTIONAL COMMIT covering all the changes:
+
+Rules:
+- subject: "<type>(<scope>): <imperative description>"
+  - type: feat | fix | refactor | chore | docs | test | perf | ci | style | build
+  - scope: the primary area affected; omit if changes span many unrelated areas
+  - description: imperative mood, no period, 72 chars max for the whole subject line
+  - if several distinct features or fixes are present, pick the most impactful for the subject
+- body: cover EVERY significant change visible in the file list. For each distinct change,
+  one sentence on what was done and why. Plain English, no bullet lists, no repetition of the subject.
+
+Respond with ONLY valid JSON (no markdown fences):
+{"subject":"<subject line>","body":"<body covering all changes, or empty string>"}`;
+
+    const text = await callClaude(system, `Diff:\n${diff.slice(0, 20000)}`, this.apiKey, this.model);
+    const parsed = parseJson<Partial<import("./types.js").AiCommitMessageResponse>>(text, {});
+    return {
+      subject: parsed.subject?.trim() ?? "chore: update files",
+      body: parsed.body?.trim() || undefined,
+    };
+  }
 }
