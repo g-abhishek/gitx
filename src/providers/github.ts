@@ -102,7 +102,29 @@ export class GitHubProvider implements GitProvider {
           params: { per_page: 100 },
         }),
       ]);
-      return [...reviewRes.data, ...issueRes.data].map(mapGhComment);
+
+      // Map review comments normally (they already carry path + line)
+      const reviewComments = reviewRes.data.map(mapGhComment);
+
+      // For issue comments, reconstruct path + line from gitx's fallback format:
+      //   📍 **`path/to/file.ts:42`**\n\nactual comment body
+      // These are posted when GitHub rejects inline review comments with 422.
+      const issueComments = issueRes.data.map((c) => {
+        const mapped = mapGhComment(c);
+        if (!mapped.path) {
+          const m = c.body.match(/^📍 \*\*`([^:`]+):(\d+)`\*\*\n\n([\s\S]+)$/);
+          if (m) {
+            mapped.path = m[1]!;
+            mapped.line = parseInt(m[2]!, 10);
+            // Expose the real comment body (without the 📍 header) so the AI
+            // gets clean text to work with, not the path:line decoration.
+            mapped.body = m[3]!.trim();
+          }
+        }
+        return mapped;
+      });
+
+      return [...reviewComments, ...issueComments];
     } catch (err) {
       throw wrapGhError(err, `get PR #${prNumber} comments`);
     }
