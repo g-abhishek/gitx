@@ -123,11 +123,14 @@ function isHumanComment(c: PullRequestComment): boolean {
 
 export interface AddressWorkflowOptions {
   /**
-   * "interactive" (default) — show each fix and ask to apply.
-   * "auto"        — apply all high-confidence fixes silently, skip low-confidence.
-   * "no-push"     — same as interactive but never commits or pushes.
+   * "interactive"      (default) — show each fix and ask to apply; ask to commit+push at the end.
+   * "auto"             — apply all high-confidence fixes silently, commit and push.
+   * "no-push"          — interactive but never commits or pushes (local changes only).
+   * "commit-no-push"   — interactive, commits the fixes but does NOT push.
+   *                      Used by `gitx sync` so sync can push everything together
+   *                      after rebasing/merging onto the base branch.
    */
-  mode?: "interactive" | "auto" | "no-push";
+  mode?: "interactive" | "auto" | "no-push" | "commit-no-push";
 }
 
 export async function runAddressWorkflow(
@@ -287,9 +290,32 @@ export async function runAddressWorkflow(
   let pushed = false;
   let commitSha: string | undefined;
 
+  const commitMsg = `fix: address PR #${prNumber} review comments (${appliedCount} fix${appliedCount !== 1 ? "es" : ""})`;
+
   if (mode === "no-push") {
+    // Local changes only — no commit, no push
     logger.info("ℹ️  Changes applied locally (--no-push mode). Review and push when ready.");
+
+  } else if (mode === "commit-no-push") {
+    // Commit the fixes but let the caller (gitx sync) handle the push
+    // after it has rebased/merged the branch onto the base.
+    const stageSpinner = ora("Staging fix changes…").start();
+    await git(["add", ...filesChanged.map((f) => resolvePath(cwd, f))], cwd);
+    stageSpinner.succeed("Changes staged.");
+
+    const commitSpinner = ora("Committing fixes…").start();
+    const { stderr: commitErr } = await git(["commit", "-m", commitMsg], cwd);
+    if (commitErr && commitErr.includes("error")) {
+      commitSpinner.fail(`Commit failed: ${commitErr}`);
+    } else {
+      commitSpinner.succeed(`Committed: "${commitMsg}"`);
+      const { stdout: sha } = await git(["rev-parse", "--short", "HEAD"], cwd);
+      commitSha = sha;
+    }
+    logger.info("ℹ️  Fixes committed. Sync will rebase and push everything together.");
+
   } else {
+    // "interactive" or "auto" — ask user then commit+push
     let shouldPush = false;
     if (mode === "auto") {
       shouldPush = true;
@@ -315,16 +341,13 @@ export async function runAddressWorkflow(
     }
 
     if (shouldPush) {
-      // Stage changed files
       const stageSpinner = ora("Staging changes…").start();
       await git(["add", ...filesChanged.map((f) => resolvePath(cwd, f))], cwd);
       stageSpinner.succeed("Changes staged.");
 
-      // Commit
-      const commitMsg = `fix: address PR #${prNumber} review comments (${appliedCount} fix${appliedCount !== 1 ? "es" : ""})`;
       const commitSpinner = ora("Committing…").start();
       const { stderr: commitErr } = await git(["commit", "-m", commitMsg], cwd);
-      if (commitErr && !commitErr.toLowerCase().includes("master") && commitErr.includes("error")) {
+      if (commitErr && commitErr.includes("error")) {
         commitSpinner.fail(`Commit failed: ${commitErr}`);
       } else {
         commitSpinner.succeed(`Committed: "${commitMsg}"`);
@@ -332,7 +355,6 @@ export async function runAddressWorkflow(
         commitSha = sha;
       }
 
-      // Push
       const pushSpinner = ora("Pushing to remote…").start();
       const { stderr: pushErr } = await git(["push"], cwd);
       if (pushErr && pushErr.includes("error")) {
@@ -347,6 +369,8 @@ export async function runAddressWorkflow(
   }
 
   // ── 5. Reply to addressed comment threads ─────────────────────────────────
+  // Only reply after a real push — not in commit-no-push mode (sync will push later
+  // and the SHA we have now will change after rebase; reply happens post-push in that flow).
   let repliedCount = 0;
   if (pushed && commitSha) {
     const replySpinner = ora("Replying to addressed comment threads…").start();

@@ -201,6 +201,12 @@ export function registerSyncCommand(program: Command): void {
         return;
       }
 
+      // ── Check for unresolved PR review comments BEFORE syncing ────────────
+      // If the current branch has an open PR with unresolved inline comments,
+      // offer to resolve them now. Fixes are committed onto the branch; the
+      // sync then rebases/merges and pushes everything together.
+      await checkAndOfferAddressComments(cwd, head);
+
       logger.info(`\n🔄 Syncing  ${head}  onto  origin/${base}\n`);
 
       // Fetch latest
@@ -378,22 +384,21 @@ export function registerSyncCommand(program: Command): void {
           : `Merged origin/${base} into ${head} ✓`
       );
 
-      // ── Check for unresolved PR comments before pushing ────────────────────
-      // If the current branch has an open PR with unresolved inline review
-      // comments, surface them now so the author can address them before push.
-      await checkAndOfferAddressComments(cwd);
-
       // Rebase rewrites history → force-with-lease; merge → plain push
       await pushAfterSync(cwd, strategy === "rebase");
     });
 }
 
 /**
- * Look up any open PR for the current branch.
- * If it has unresolved inline review comments, ask the user whether to
- * address them now (before pushing) or skip and push immediately.
+ * Before syncing, look up any open PR for the current branch.
+ * If it has unresolved inline review comments, ask the user:
+ *   - "Resolve comments first, then sync"  → address + commit, sync continues
+ *   - "Sync normally"                       → proceed immediately
+ *
+ * Fixes are committed using "commit-no-push" mode so the sync rebase/merge
+ * picks them up and pushes everything together in a single push.
  */
-async function checkAndOfferAddressComments(cwd: string): Promise<void> {
+async function checkAndOfferAddressComments(cwd: string, currentBranch: string): Promise<void> {
   let gitx: Gitx | null = null;
   try {
     gitx = await Gitx.fromCwd(cwd);
@@ -411,15 +416,14 @@ async function checkAndOfferAddressComments(cwd: string): Promise<void> {
 
     // Find the open PR for the current branch
     const prs = await provider.listPRs(ctx.repoSlug);
-    const currentBranch = await getCurrentBranch(cwd);
     const openPr = prs.find((p) => p.head === currentBranch && p.state === "open");
     if (!openPr) return;
 
     prNumber = openPr.number;
 
-    // Count inline review comments (excluding bot replies)
-    const allComments = await provider.getPRComments(ctx.repoSlug, prNumber);
+    // Count inline review comments (excluding bot replies and general comments)
     const botPrefixes = ["🤖", "✅ Addressed", "📍", "*(in reply to"];
+    const allComments = await provider.getPRComments(ctx.repoSlug, prNumber);
     unresolvedCount = allComments.filter(
       (c) => c.path && c.line && c.line > 0 &&
              !botPrefixes.some((p) => c.body.trimStart().startsWith(p))
@@ -430,43 +434,48 @@ async function checkAndOfferAddressComments(cwd: string): Promise<void> {
     return; // provider error — don't block the sync
   }
 
-  // Surface the prompt
-  logger.info(`\n💬 PR #${prNumber} has ${unresolvedCount} unresolved review comment(s).`);
+  // ── Surface the choice ──────────────────────────────────────────────────────
+  logger.info(`\n💬 PR #${prNumber} has ${unresolvedCount} unresolved review comment(s).\n`);
 
   let choice: string;
   try {
     choice = await select({
-      message: "Address them before pushing?",
+      message: "How would you like to proceed?",
       choices: [
-        { name: `Address now  (AI generates fixes, you approve each one)`,       value: "address" },
-        { name: `Address locally  (apply fixes, I'll push manually)`,            value: "address-local" },
-        { name: `Skip  (push now, address comments later)`,                      value: "skip" },
+        {
+          name: `Resolve comments first, then sync  (AI generates fixes → you approve → commit → sync)`,
+          value: "resolve",
+        },
+        {
+          name: `Sync normally  (skip comment resolution, proceed with merge)`,
+          value: "skip",
+        },
       ],
     });
   } catch {
     return; // Ctrl-C → skip
   }
 
-  if (choice === "skip") return;
+  if (choice === "skip") {
+    logger.info("⏭️  Skipping comment resolution — proceeding with sync.\n");
+    return;
+  }
 
-  logger.info(`\n🔧 Addressing review comments on PR #${prNumber}…\n`);
+  // ── Resolve comments (commit but don't push — sync handles the push) ───────
+  logger.info(`\n🔧 Resolving ${unresolvedCount} review comment(s) on PR #${prNumber}…\n`);
   try {
-    const result = await runAddressWorkflow(gitx!, prNumber, {
-      mode: choice === "address-local" ? "no-push" : "interactive",
-    });
-
+    const result = await runAddressWorkflow(gitx!, prNumber, { mode: "commit-no-push" });
     const applied = result.addressed.filter((a) => a.applied).length;
+    const skipped = result.addressed.filter((a) => a.skipped).length;
+
     if (applied > 0) {
-      logger.success(`✅ ${applied} fix(es) applied.`);
-      if (result.pushed) {
-        logger.success(`🚀 Already pushed by address workflow — skipping duplicate push.`);
-        // Signal to the caller that we already pushed
-        (checkAndOfferAddressComments as { alreadyPushed?: boolean }).alreadyPushed = result.pushed;
-      }
-      if (result.repliedCount) logger.success(`💬 Replied to ${result.repliedCount} thread(s).`);
+      logger.success(`✅ ${applied} fix(es) committed.${skipped > 0 ? `  (${skipped} skipped)` : ""}`);
+      logger.info("   Sync will rebase these commits and push everything together.\n");
+    } else {
+      logger.info("   No fixes applied — continuing with normal sync.\n");
     }
   } catch (err) {
-    logger.warn(`⚠️  Address workflow error: ${(err as Error).message} — continuing with push.`);
+    logger.warn(`⚠️  Comment resolution error: ${(err as Error).message}\n   Continuing with sync.\n`);
   }
 }
 
