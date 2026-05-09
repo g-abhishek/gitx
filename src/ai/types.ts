@@ -44,6 +44,18 @@ export interface AiPrContentResponse {
   body: string;
 }
 
+export interface AiConflictResolutionResponse {
+  /** The full file content with ALL conflict markers removed and conflicts resolved. */
+  resolved: string;
+  /**
+   * "high"  → AI is confident both sides are fully reconciled — safe to auto-apply.
+   * "low"   → Changes are contradictory or ambiguous — show to user for confirmation.
+   */
+  confidence: "high" | "low";
+  /** One-sentence explanation of what the AI did (shown to the user). */
+  explanation: string;
+}
+
 export interface AiClient {
   analyzeTask(input: string): Promise<AiAnalyzeTaskResponse>;
   generatePlan(context: unknown): Promise<AiGeneratePlanResponse>;
@@ -55,6 +67,11 @@ export interface AiClient {
   generateCommitMessage(diff: string): Promise<AiCommitMessageResponse>;
   /** Generate a PR title and description from branch commits + diff. */
   generatePrContent(commits: string[], diff: string): Promise<AiPrContentResponse>;
+  /**
+   * Resolve git merge conflict markers in a file.
+   * Returns the fully resolved file content + confidence level.
+   */
+  resolveConflict(filePath: string, conflictContent: string): Promise<AiConflictResolutionResponse>;
 }
 
 export interface AiReviewPRResponse {
@@ -68,4 +85,3 @@ export interface AiReviewPRResponse {
   positives: string[];
   verdict: "approve" | "request_changes" | "comment";
 }
-

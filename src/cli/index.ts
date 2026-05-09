@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { registerInitCommand } from "./commands/init.js";
 import { registerCommitCommand } from "./commands/commit.js";
 import { registerPushCommand } from "./commands/push.js";
+import { registerSyncCommand } from "./commands/sync.js";
 import { registerImplementCommand } from "./commands/implement.js";
 import { registerPrCommands } from "./commands/pr/index.js";
 import { registerConfigCommand } from "./commands/config.js";
@@ -19,6 +20,7 @@ export async function runCli(argv: string[]): Promise<void> {
   registerInitCommand(program);
   registerCommitCommand(program);
   registerPushCommand(program);
+  registerSyncCommand(program);
   registerConfigCommand(program);
   registerImplementCommand(program);
   registerPrCommands(program);

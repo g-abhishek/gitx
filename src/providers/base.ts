@@ -40,6 +40,17 @@ export interface CreatePrOptions {
   draft?: boolean;
 }
 
+export interface MergePrOptions {
+  /** How to merge. Providers map this to their own enum. Default: "squash" */
+  method: "squash" | "merge" | "rebase";
+  /** Optional merge/squash commit title (falls back to PR title) */
+  commitTitle?: string;
+  /** Optional merge/squash commit message body */
+  commitMessage?: string;
+  /** Delete the source branch after a successful merge */
+  deleteSourceBranch?: boolean;
+}
+
 export interface GitProvider {
   /** List open pull requests for the repo */
   listPRs(repoSlug: string): Promise<PullRequest[]>;
@@ -68,4 +79,7 @@ export interface GitProvider {
    * PRs cannot be hard-deleted via any provider's public API.
    */
   closePR(repoSlug: string, prNumber: number): Promise<void>;
+
+  /** Merge a pull request using the specified strategy. */
+  mergePR(repoSlug: string, prNumber: number, opts: MergePrOptions): Promise<void>;
 }

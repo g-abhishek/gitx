@@ -292,6 +292,41 @@ Respond with ONLY valid JSON (no markdown fences):
     };
   }
 
+<<<<<<< HEAD
+  async resolveConflict(filePath: string, conflictContent: string): Promise<import("./types.js").AiConflictResolutionResponse> {
+    const system = `You are an expert software engineer resolving git merge conflicts.
+
+The file contains standard git conflict markers:
+  <<<<<<< HEAD  — changes on the current branch
+  =======       — separator
+  >>>>>>> theirs — incoming changes
+
+Your task:
+1. Understand BOTH sides of every conflict.
+2. Produce a single correct version preserving the intent of BOTH changes where possible.
+3. If the sides are genuinely contradictory, set confidence to "low".
+
+Rules:
+- Remove ALL conflict markers from the output.
+- Do NOT add explanatory comments.
+- Keep all non-conflicting code exactly as-is.
+- Output must be syntactically valid.
+
+Respond with ONLY valid JSON (no markdown fences):
+{"resolved":"<full resolved file content>","confidence":"high|low","explanation":"<one sentence>"}`;
+
+    const userPrompt = `File: ${filePath}\n\n${conflictContent.slice(0, 20000)}`;
+    const text = await callClaudeCli(system, userPrompt);
+    const parsed = parseJson<Partial<import("./types.js").AiConflictResolutionResponse>>(text, {});
+    return {
+      resolved: parsed.resolved ?? conflictContent,
+      confidence: parsed.confidence === "low" ? "low" : "high",
+      explanation: parsed.explanation?.trim() ?? "Conflict resolved.",
+    };
+  }
+
+=======
+>>>>>>> origin/main
   async generateCommitMessage(diff: string): Promise<import("./types.js").AiCommitMessageResponse> {
     const system = `You are an expert software engineer writing git commit messages.
 You receive either a plain unified diff OR a structured input with:

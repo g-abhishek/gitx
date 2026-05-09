@@ -4,6 +4,7 @@ import { GitxError } from "../utils/errors.js";
 import type {
   CreatePrOptions,
   GitProvider,
+  MergePrOptions,
   PullRequest,
   PullRequestComment,
 } from "./base.js";
@@ -189,6 +190,47 @@ export class AzureProvider implements GitProvider {
       return paths.length > 0 ? `Changed files:\n${paths.join("\n")}` : "";
     } catch {
       return "";
+    }
+  }
+
+  async mergePR(_repoSlug: string, prNumber: number, opts: MergePrOptions): Promise<void> {
+    // Azure requires the latest source commit SHA to complete a PR
+    let lastMergeSourceCommit: { commitId: string } | undefined;
+    try {
+      const { data } = await this.http.get<AzPr>(
+        `/git/repositories/${this.repoName}/pullrequests/${prNumber}`,
+        { params: this.apiParams() }
+      );
+      // Azure puts the head commit on the PR object
+      const pr = data as AzPr & { lastMergeSourceCommit?: { commitId: string } };
+      lastMergeSourceCommit = pr.lastMergeSourceCommit;
+    } catch (err) {
+      throw wrapAzError(err, `get PR #${prNumber} for merge`);
+    }
+
+    // Map our method to Azure's mergeStrategy
+    const strategyMap: Record<MergePrOptions["method"], string> = {
+      squash: "squash",
+      merge: "noFastForward",
+      rebase: "rebase",
+    };
+
+    try {
+      await this.http.patch(
+        `/git/repositories/${this.repoName}/pullrequests/${prNumber}`,
+        {
+          status: "completed",
+          lastMergeSourceCommit,
+          completionOptions: {
+            mergeStrategy: strategyMap[opts.method],
+            deleteSourceBranch: opts.deleteSourceBranch ?? false,
+            squashMerge: opts.method === "squash",
+          },
+        },
+        { params: this.apiParams() }
+      );
+    } catch (err) {
+      throw wrapAzError(err, `merge PR #${prNumber}`);
     }
   }
 
