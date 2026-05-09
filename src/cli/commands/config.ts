@@ -4,7 +4,7 @@ import ora from "ora";
 import { logger } from "../../logger/logger.js";
 import type { GitxConfig } from "../../types/config.js";
 import type { ProviderKind } from "../../types/provider.js";
-import { findConfigPath, getGlobalConfigPath, loadConfig, saveConfig } from "../../config/config.js";
+import { findConfigPath, loadConfig, saveConfig } from "../../config/config.js";
 import { GitxError } from "../../utils/errors.js";
 import { validateNonEmpty } from "../../utils/validators.js";
 
@@ -75,9 +75,9 @@ export function registerConfigCommand(program: Command): void {
       };
 
       const spinner = ora("Saving config…").start();
-      await saveConfig(updated);
+      const savedPath = await saveConfig(updated);
       spinner.succeed("Config saved");
-      logger.info(`🧾 Saved: ${getGlobalConfigPath()}`);
+      logger.info(`🧾 Saved: ${savedPath}`);
       logger.success(`✅ Provider updated: ${provider}`);
     });
 
@@ -93,9 +93,9 @@ export function registerConfigCommand(program: Command): void {
       const updated: GitxConfig = { ...existing, defaultBranch: branch.trim() };
 
       const spinner = ora("Saving config…").start();
-      await saveConfig(updated);
+      const savedPath = await saveConfig(updated);
       spinner.succeed("Config saved");
-      logger.info(`🧾 Saved: ${getGlobalConfigPath()}`);
+      logger.info(`🧾 Saved: ${savedPath}`);
       logger.success("✅ Default branch updated");
     });
 }

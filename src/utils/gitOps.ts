@@ -1,0 +1,255 @@
+/**
+ * Extended git operations for the implement workflow.
+ * All functions execute native git commands via child_process.
+ */
+
+import { execFile, exec } from "node:child_process";
+import { promisify } from "node:util";
+import { writeFile, mkdir } from "node:fs/promises";
+import { dirname, resolve, join } from "node:path";
+import { GitxError } from "./errors.js";
+
+const execFileAsync = promisify(execFile);
+const execAsync = promisify(exec);
+
+// ─── Internal helper ──────────────────────────────────────────────────────────
+
+async function git(args: string[], cwd: string): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync("git", args, { cwd });
+    return String(stdout ?? "").trim();
+  } catch (err: unknown) {
+    const stderr =
+      (err as { stderr?: string }).stderr ??
+      (err as Error).message ??
+      String(err);
+    throw new GitxError(`git ${args[0]} failed: ${stderr.trim()}`, {
+      exitCode: 1,
+      cause: err,
+    });
+  }
+}
+
+// ─── Branch operations ────────────────────────────────────────────────────────
+
+export async function getCurrentBranch(cwd = process.cwd()): Promise<string> {
+  return git(["rev-parse", "--abbrev-ref", "HEAD"], cwd);
+}
+
+/**
+ * Resolve the default branch (main/master/develop) by inspecting the remote.
+ * Falls back to "main" if nothing can be determined.
+ */
+export async function getDefaultBranchFromGit(
+  cwd = process.cwd(),
+  configuredDefault?: string
+): Promise<string> {
+  if (configuredDefault) return configuredDefault;
+
+  try {
+    // Try to read from remote HEAD reference
+    const out = await git(
+      ["rev-parse", "--abbrev-ref", "origin/HEAD"],
+      cwd
+    );
+    // "origin/main" → "main"
+    return out.replace(/^origin\//, "") || "main";
+  } catch {
+    // Fall back to checking common branch names
+    try {
+      const branches = await git(
+        ["branch", "-r", "--format=%(refname:short)"],
+        cwd
+      );
+      const candidates = ["origin/main", "origin/master", "origin/develop"];
+      for (const candidate of candidates) {
+        if (branches.split("\n").some((b) => b.trim() === candidate)) {
+          return candidate.replace("origin/", "");
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    return "main";
+  }
+}
+
+/**
+ * Create and checkout a new branch.
+ * If the branch already exists, just check it out.
+ */
+export async function createAndCheckoutBranch(
+  branchName: string,
+  cwd = process.cwd()
+): Promise<void> {
+  try {
+    await git(["checkout", "-b", branchName], cwd);
+  } catch {
+    // Branch might already exist – try checking it out
+    await git(["checkout", branchName], cwd);
+  }
+}
+
+/** Sanitise a free-form task string into a valid branch name */
+export function slugifyBranchName(task: string, prefix = "gitx"): string {
+  const slug = task
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 50);
+  const ts = Date.now().toString(36);
+  return `${prefix}/${slug}-${ts}`;
+}
+
+// ─── File operations ──────────────────────────────────────────────────────────
+
+/**
+ * Write content to a file inside the repo, creating parent directories as needed.
+ * Paths should be relative to `cwd`.
+ */
+export async function writeRepoFile(
+  relativePath: string,
+  content: string,
+  cwd = process.cwd()
+): Promise<void> {
+  const abs = resolve(join(cwd, relativePath));
+  await mkdir(dirname(abs), { recursive: true });
+  await writeFile(abs, content, "utf-8");
+}
+
+// ─── Diff application ─────────────────────────────────────────────────────────
+
+/**
+ * Apply a unified diff string using `git apply`.
+ * Returns `true` if applied cleanly, `false` if it failed (caller decides how
+ * to handle partial failures).
+ */
+export async function applyUnifiedDiff(
+  unifiedDiff: string,
+  cwd = process.cwd()
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    // Use --3way to handle minor conflicts gracefully
+    const { stdout, stderr } = await execAsync(
+      `echo ${JSON.stringify(unifiedDiff)} | git apply --3way --whitespace=fix -`,
+      { cwd }
+    );
+    return { ok: true, error: stderr || stdout || undefined };
+  } catch (err: unknown) {
+    const stderr =
+      (err as { stderr?: string }).stderr ??
+      (err as Error).message ??
+      String(err);
+    return { ok: false, error: stderr.trim() };
+  }
+}
+
+// ─── Staging & committing ─────────────────────────────────────────────────────
+
+export async function stageAll(cwd = process.cwd()): Promise<void> {
+  await git(["add", "-A"], cwd);
+}
+
+export async function hasStagedChanges(cwd = process.cwd()): Promise<boolean> {
+  try {
+    const out = await git(["diff", "--cached", "--name-only"], cwd);
+    return out.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+export async function commitChanges(
+  message: string,
+  cwd = process.cwd()
+): Promise<string> {
+  await git(["commit", "-m", message], cwd);
+  return git(["rev-parse", "HEAD"], cwd);
+}
+
+// ─── Push ─────────────────────────────────────────────────────────────────────
+
+export async function pushBranch(
+  branchName: string,
+  cwd = process.cwd()
+): Promise<void> {
+  await git(["push", "--set-upstream", "origin", branchName], cwd);
+}
+
+// ─── Repo inspection ──────────────────────────────────────────────────────────
+
+/**
+ * List all tracked files in the repo (respects .gitignore).
+ * Returns paths relative to `cwd`.
+ */
+export async function listTrackedFiles(cwd = process.cwd()): Promise<string[]> {
+  try {
+    const out = await git(["ls-files"], cwd);
+    return out
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Get the unified diff of all uncommitted changes (staged + unstaged).
+ */
+export async function getWorkingDiff(cwd = process.cwd()): Promise<string> {
+  try {
+    const staged = await git(["diff", "--cached"], cwd);
+    const unstaged = await git(["diff"], cwd);
+    return [staged, unstaged].filter(Boolean).join("\n");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Read file content as a string. Returns empty string if file doesn't exist.
+ */
+export async function readRepoFile(
+  relativePath: string,
+  cwd = process.cwd()
+): Promise<string | undefined> {
+  try {
+    const abs = resolve(join(cwd, relativePath));
+    const { readFile } = await import("node:fs/promises");
+    return await readFile(abs, "utf-8");
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Check whether a branch exists on the remote (origin).
+ * Uses git ls-remote which does not require a full fetch.
+ */
+export async function branchExistsOnRemote(
+  branchName: string,
+  cwd = process.cwd()
+): Promise<boolean> {
+  try {
+    const out = await git(
+      ["ls-remote", "--heads", "origin", `refs/heads/${branchName}`],
+      cwd
+    );
+    return out.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Returns true if the working tree has uncommitted changes (staged or unstaged).
+ */
+export async function isWorkingTreeDirty(cwd = process.cwd()): Promise<boolean> {
+  try {
+    const out = await git(["status", "--porcelain"], cwd);
+    return out.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
