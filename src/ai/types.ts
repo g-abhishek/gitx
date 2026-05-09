@@ -37,6 +37,13 @@ export interface AiCommitMessageResponse {
   body?: string;
 }
 
+export interface AiPrContentResponse {
+  /** Short, human-readable PR title (not necessarily conventional-commit format) */
+  title: string;
+  /** Multi-paragraph PR description: what changed, why, how to test */
+  body: string;
+}
+
 export interface AiClient {
   analyzeTask(input: string): Promise<AiAnalyzeTaskResponse>;
   generatePlan(context: unknown): Promise<AiGeneratePlanResponse>;
@@ -46,6 +53,8 @@ export interface AiClient {
   reviewPR(context: unknown): Promise<AiReviewPRResponse>;
   /** Generate a conventional commit message from a unified diff. */
   generateCommitMessage(diff: string): Promise<AiCommitMessageResponse>;
+  /** Generate a PR title and description from branch commits + diff. */
+  generatePrContent(commits: string[], diff: string): Promise<AiPrContentResponse>;
 }
 
 export interface AiReviewPRResponse {

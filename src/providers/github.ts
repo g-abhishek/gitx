@@ -147,6 +147,14 @@ export class GitHubProvider implements GitProvider {
     }
   }
 
+  async closePR(repoSlug: string, prNumber: number): Promise<void> {
+    try {
+      await this.http.patch(`/repos/${repoSlug}/pulls/${prNumber}`, { state: "closed" });
+    } catch (err) {
+      throw wrapGhError(err, `close PR #${prNumber}`);
+    }
+  }
+
   async getDefaultBranch(repoSlug: string): Promise<string> {
     try {
       const { data } = await withRetry(() => this.http.get<GhRepo>(`/repos/${repoSlug}`));

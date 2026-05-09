@@ -138,6 +138,17 @@ export class GitLabProvider implements GitProvider {
     }
   }
 
+  async closePR(repoSlug: string, prNumber: number): Promise<void> {
+    try {
+      await this.http.put(
+        `/projects/${this.enc(repoSlug)}/merge_requests/${prNumber}`,
+        { state_event: "close" }
+      );
+    } catch (err) {
+      throw wrapGlError(err, `close MR !${prNumber}`);
+    }
+  }
+
   async getDefaultBranch(repoSlug: string): Promise<string> {
     try {
       const { data } = await withRetry(() =>

@@ -192,6 +192,18 @@ export class AzureProvider implements GitProvider {
     }
   }
 
+  async closePR(_repoSlug: string, prNumber: number): Promise<void> {
+    try {
+      await this.http.patch(
+        `/git/repositories/${this.repoName}/pullrequests/${prNumber}`,
+        { status: "abandoned" },
+        { params: this.apiParams() }
+      );
+    } catch (err) {
+      throw wrapAzError(err, `abandon PR #${prNumber}`);
+    }
+  }
+
   async getDefaultBranch(_repoSlug: string): Promise<string> {
     try {
       const { data } = await this.http.get<AzRepo>(

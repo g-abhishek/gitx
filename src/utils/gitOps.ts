@@ -224,6 +224,100 @@ export async function getWorkingDiffStat(cwd = process.cwd()): Promise<string> {
 }
 
 /**
+ * Auto-detect the most likely base branch for the current feature branch.
+ *
+ * Strategy:
+ *   1. Check if the current branch has a configured upstream tracking branch.
+ *   2. Otherwise, try common default branch names (main, master, develop, dev).
+ *   3. For each candidate, count commits on HEAD that are NOT in that branch.
+ *      The candidate with the fewest such commits is the likely origin.
+ *
+ * Falls back to "main" if nothing can be determined.
+ */
+export async function detectBaseBranch(cwd = process.cwd()): Promise<string> {
+  // Get current branch name upfront — used for all checks below
+  const current = await git(["rev-parse", "--abbrev-ref", "HEAD"], cwd).catch(() => "");
+
+  // 1. Try upstream tracking branch — only useful if it points to a DIFFERENT
+  //    branch (e.g. origin/main), not the branch's own remote tracking ref.
+  //    e.g. "origin/gitx/test" → "gitx/test" == current → skip
+  //         "origin/main"      → "main"       != current → use it
+  try {
+    const upstream = await git(["rev-parse", "--abbrev-ref", "@{upstream}"], cwd);
+    const branch = upstream.replace(/^[^/]+\//, "").trim();
+    if (branch && branch !== current) return branch;
+  } catch {
+    // No upstream configured — fall through
+  }
+
+  // 2. Check remote HEAD (origin's default branch)
+  try {
+    const remoteHead = await git(["rev-parse", "--abbrev-ref", "origin/HEAD"], cwd);
+    const branch = remoteHead.replace(/^origin\//, "").trim();
+    if (branch && branch !== current) return branch;
+  } catch {
+    // Not available — fall through
+  }
+
+  // 3. Count commits ahead of each common default branch name
+  const candidates = ["main", "master", "develop", "dev", "staging"];
+  const counts: Array<{ branch: string; ahead: number }> = [];
+  for (const candidate of candidates) {
+    if (candidate === current) continue;
+    try {
+      // Count commits on HEAD not in candidate
+      const out = await git(["rev-list", "--count", `${candidate}..HEAD`], cwd);
+      counts.push({ branch: candidate, ahead: parseInt(out.trim(), 10) || 0 });
+    } catch {
+      // Branch doesn't exist locally — skip
+    }
+  }
+
+  if (counts.length > 0) {
+    // Pick the branch with the fewest commits ahead (closest ancestor)
+    counts.sort((a, b) => a.ahead - b.ahead);
+    return counts[0]!.branch;
+  }
+
+  return "main";
+}
+
+/**
+ * Get the one-line commit log for commits on HEAD that are not in baseBranch.
+ * Used to give AI context about what this branch adds.
+ */
+export async function getBranchCommits(
+  cwd = process.cwd(),
+  baseBranch = "main"
+): Promise<string[]> {
+  try {
+    const out = await git(
+      ["log", "--oneline", "--no-decorate", `${baseBranch}..HEAD`],
+      cwd
+    );
+    return out.split("\n").map((l) => l.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Get the unified diff of all changes between baseBranch and HEAD.
+ * This is what the PR reviewer would see — all additions across all commits.
+ */
+export async function getBranchDiff(
+  cwd = process.cwd(),
+  baseBranch = "main"
+): Promise<string> {
+  try {
+    // Three-dot diff: all changes introduced by this branch vs. the merge base
+    return await git(["diff", `${baseBranch}...HEAD`], cwd);
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Read file content as a string. Returns empty string if file doesn't exist.
  */
 export async function readRepoFile(

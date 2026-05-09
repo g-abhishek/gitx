@@ -392,6 +392,31 @@ PR Description: ${ctx.prBody ?? ""}${diffSection}${commentsSection}`;
     };
   }
 
+  async generatePrContent(commits: string[], diff: string): Promise<import("./types.js").AiPrContentResponse> {
+    const system = `You are an expert software engineer writing pull request descriptions.
+You are given a list of commits on the branch and the unified diff of all changes.
+
+Produce a clear, informative PR title and description:
+
+Rules:
+- title: short, human-readable, present-tense (e.g. "Add user authentication flow")
+  No conventional-commit prefix needed. Max 72 chars.
+- body: 2-4 sentences describing WHAT changed and WHY. Plain English.
+  Do not repeat the title. Do not use bullet points.
+
+Respond with ONLY valid JSON (no markdown fences):
+{"title":"<PR title>","body":"<PR description>"}`;
+
+    const commitList = commits.slice(0, 20).join("\n");
+    const userPrompt = `Commits on this branch:\n${commitList}\n\nDiff:\n${diff.slice(0, 16000)}`;
+    const text = await callClaude(system, userPrompt, this.apiKey, this.model);
+    const parsed = parseJson<Partial<import("./types.js").AiPrContentResponse>>(text, {});
+    return {
+      title: parsed.title?.trim() ?? "Update branch",
+      body: parsed.body?.trim() ?? "",
+    };
+  }
+
   async generateCommitMessage(diff: string): Promise<import("./types.js").AiCommitMessageResponse> {
     const system = `You are an expert software engineer writing git commit messages.
 You receive either a plain unified diff OR a structured input with:

@@ -61,4 +61,11 @@ export interface GitProvider {
 
   /** Get the unified diff of a pull request (all file changes) */
   getPRDiff(repoSlug: string, prNumber: number): Promise<string>;
+
+  /**
+   * Close (or abandon on Azure) a pull request.
+   * GitHub/GitLab → closed; Azure DevOps → abandoned.
+   * PRs cannot be hard-deleted via any provider's public API.
+   */
+  closePR(repoSlug: string, prNumber: number): Promise<void>;
 }
