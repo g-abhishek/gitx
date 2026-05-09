@@ -417,6 +417,10 @@ Respond with ONLY valid JSON (no markdown fences):
     };
   }
 
+<<<<<<< HEAD
+=======
+<<<<<<< HEAD
+>>>>>>> origin/main
   async resolveConflict(filePath: string, conflictContent: string): Promise<import("./types.js").AiConflictResolutionResponse> {
     const system = `You are an expert software engineer resolving git merge conflicts.
 
@@ -449,6 +453,11 @@ Respond with ONLY valid JSON (no markdown fences):
     };
   }
 
+<<<<<<< HEAD
+=======
+=======
+>>>>>>> origin/main
+>>>>>>> origin/main
   async generateCommitMessage(diff: string): Promise<import("./types.js").AiCommitMessageResponse> {
     const system = `You are an expert software engineer writing git commit messages.
 You receive either a plain unified diff OR a structured input with:
