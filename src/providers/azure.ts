@@ -169,6 +169,29 @@ export class AzureProvider implements GitProvider {
     }
   }
 
+
+  async getPRDiff(_repoSlug: string, prNumber: number): Promise<string> {
+    try {
+      // Get latest iteration first
+      const iterRes = await this.http.get<{ value: Array<{ id: number }> }>(
+        `/git/repositories/${this.repoName}/pullRequests/${prNumber}/iterations`,
+        { params: this.apiParams() }
+      );
+      const iterations = iterRes.data.value ?? [];
+      if (iterations.length === 0) return "";
+      const latestId = iterations[iterations.length - 1]!.id;
+
+      const { data } = await this.http.get<{ changeEntries: Array<{ item: { path: string }; changeType: number }> }>(
+        `/git/repositories/${this.repoName}/pullRequests/${prNumber}/iterations/${latestId}/changes`,
+        { params: this.apiParams() }
+      );
+      const paths = (data.changeEntries ?? []).map((e) => e.item?.path).filter(Boolean);
+      return paths.length > 0 ? `Changed files:\n${paths.join("\n")}` : "";
+    } catch {
+      return "";
+    }
+  }
+
   async getDefaultBranch(_repoSlug: string): Promise<string> {
     try {
       const { data } = await this.http.get<AzRepo>(

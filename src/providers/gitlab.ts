@@ -126,6 +126,18 @@ export class GitLabProvider implements GitProvider {
     }
   }
 
+
+  async getPRDiff(repoSlug: string, prNumber: number): Promise<string> {
+    try {
+      const { data } = await this.http.get<Array<{ diff: string; new_path: string; old_path: string }>>(
+        `/projects/${this.enc(repoSlug)}/merge_requests/${prNumber}/diffs`
+      );
+      return data.map((d) => `--- a/${d.old_path}\n+++ b/${d.new_path}\n${d.diff}`).join("\n\n");
+    } catch {
+      return "";
+    }
+  }
+
   async getDefaultBranch(repoSlug: string): Promise<string> {
     try {
       const { data } = await withRetry(() =>

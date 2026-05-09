@@ -58,4 +58,7 @@ export interface GitProvider {
 
   /** Resolve the repo's default branch (e.g. "main", "master") */
   getDefaultBranch(repoSlug: string): Promise<string>;
+
+  /** Get the unified diff of a pull request (all file changes) */
+  getPRDiff(repoSlug: string, prNumber: number): Promise<string>;
 }

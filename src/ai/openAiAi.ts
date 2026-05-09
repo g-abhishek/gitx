@@ -1,12 +1,10 @@
 /**
- * Claude AI integration via the Anthropic Messages API.
+ * OpenAiAi — OpenAI Chat Completions API integration.
  *
- * Authentication: reads ANTHROPIC_API_KEY from the environment.
- * Model:          defaults to claude-3-5-haiku-20241022 (fast, affordable).
- *                 Override via GITX_AI_MODEL env var.
+ * Authentication: OPENAI_API_KEY env var or stored config key.
+ * Model:          defaults to gpt-4o. Override via GITX_AI_MODEL env var.
  *
- * All methods send a structured system prompt and parse the JSON response.
- * If parsing fails we fall back gracefully rather than crashing.
+ * All methods use the same structured JSON prompt pattern as ClaudeAi.
  */
 
 import axios, { isAxiosError } from "axios";
@@ -21,8 +19,8 @@ import type {
   AiSummarizeChangesResponse,
 } from "./types.js";
 
-const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
-const DEFAULT_MODEL = "claude-3-5-haiku-20241022";
+const OPENAI_API = "https://api.openai.com/v1/chat/completions";
+const DEFAULT_MODEL = "gpt-4o";
 const MAX_TOKENS = 4096;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -31,76 +29,87 @@ function getModel(override?: string): string {
   return process.env["GITX_AI_MODEL"] ?? override ?? DEFAULT_MODEL;
 }
 
-interface ClaudeMessage {
-  role: "user" | "assistant";
+interface ChatMessage {
+  role: "system" | "user" | "assistant";
   content: string;
 }
 
-interface ClaudeRequestBody {
+interface OpenAiRequestBody {
   model: string;
   max_tokens: number;
-  system: string;
-  messages: ClaudeMessage[];
+  messages: ChatMessage[];
 }
 
-interface ClaudeResponseBody {
-  content: Array<{ type: string; text: string }>;
+interface OpenAiResponseBody {
+  choices: Array<{
+    message: { role: string; content: string };
+    finish_reason: string;
+  }>;
 }
 
-async function callClaude(system: string, userPrompt: string, apiKey: string, model: string): Promise<string> {
-  const body: ClaudeRequestBody = {
+async function callOpenAi(
+  system: string,
+  userPrompt: string,
+  apiKey: string,
+  model: string
+): Promise<string> {
+  const body: OpenAiRequestBody = {
     model,
     max_tokens: MAX_TOKENS,
-    system,
-    messages: [{ role: "user", content: userPrompt }],
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: userPrompt },
+    ],
   };
 
   try {
-    const { data } = await axios.post<ClaudeResponseBody>(ANTHROPIC_API, body, {
+    const { data } = await axios.post<OpenAiResponseBody>(OPENAI_API, body, {
       headers: {
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
       },
       timeout: 60_000,
     });
 
-    const text = data.content.find((c) => c.type === "text")?.text ?? "";
-    return text;
+    return data.choices[0]?.message?.content?.trim() ?? "";
   } catch (err) {
     if (isAxiosError(err)) {
       const status = err.response?.status;
-      const msg = (err.response?.data as Record<string, unknown> | undefined)?.error ?? err.message;
+      const msg =
+        (err.response?.data as Record<string, unknown> | undefined)?.error ??
+        err.message;
       if (status === 401) {
         throw new GitxError(
-          "Anthropic API authentication failed. Check ANTHROPIC_API_KEY.",
+          "OpenAI API authentication failed. Check OPENAI_API_KEY.",
+          { exitCode: 1, cause: err }
+        );
+      }
+      if (status === 429) {
+        throw new GitxError(
+          "OpenAI rate limit exceeded. Wait a moment and retry.",
           { exitCode: 1, cause: err }
         );
       }
       throw new GitxError(
-        `Anthropic API error (${status ?? "network"}): ${String(msg)}`,
+        `OpenAI API error (${status ?? "network"}): ${String(msg)}`,
         { exitCode: 1, cause: err }
       );
     }
-    throw new GitxError(`Unexpected AI error: ${String(err)}`, { exitCode: 1, cause: err });
+    throw new GitxError(`Unexpected OpenAI error: ${String(err)}`, {
+      exitCode: 1,
+      cause: err,
+    });
   }
 }
 
-/**
- * Extract JSON from a Claude response that may include markdown code fences.
- * Claude sometimes wraps JSON in ```json ... ``` blocks.
- */
 function extractJson(text: string): string {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fenced?.[1]) return fenced[1].trim();
-  // Find first { or [ and last } or ]
   const start = text.search(/[{[]/);
   const endBrace = text.lastIndexOf("}");
   const endBracket = text.lastIndexOf("]");
   const end = Math.max(endBrace, endBracket);
-  if (start !== -1 && end !== -1 && end > start) {
-    return text.slice(start, end + 1);
-  }
+  if (start !== -1 && end !== -1 && end > start) return text.slice(start, end + 1);
   return text.trim();
 }
 
@@ -112,21 +121,21 @@ function parseJson<T>(text: string, fallback: T): T {
   }
 }
 
-// ─── ClaudeAi ─────────────────────────────────────────────────────────────────
+// ─── OpenAiAi ─────────────────────────────────────────────────────────────────
 
-export class ClaudeAi implements AiClient {
+export class OpenAiAi implements AiClient {
   private readonly apiKey: string;
   private readonly model: string;
 
   /**
-   * @param apiKey  Anthropic API key. Falls back to ANTHROPIC_API_KEY env var.
-   * @param model   Model override. Falls back to GITX_AI_MODEL env var then default.
+   * @param apiKey  OpenAI API key. Falls back to OPENAI_API_KEY env var.
+   * @param model   Model override. Falls back to GITX_AI_MODEL then gpt-4o.
    */
   constructor(apiKey?: string, model?: string) {
-    const key = apiKey ?? process.env["ANTHROPIC_API_KEY"];
+    const key = apiKey ?? process.env["OPENAI_API_KEY"];
     if (!key) {
       throw new GitxError(
-        "No Anthropic API key available. Run `gitx config setup` or set ANTHROPIC_API_KEY.",
+        "No OpenAI API key available. Run `gitx config set openai` or set OPENAI_API_KEY.",
         { exitCode: 2 }
       );
     }
@@ -134,13 +143,13 @@ export class ClaudeAi implements AiClient {
     this.model = getModel(model);
   }
 
-  /** Check whether an API key is available without instantiating the class. */
+  /** Check whether an OpenAI API key is available without instantiating. */
   static isAvailable(key?: string): boolean {
-    return Boolean(key ?? process.env["ANTHROPIC_API_KEY"]);
+    return Boolean(key ?? process.env["OPENAI_API_KEY"]);
   }
 
   async analyzeTask(input: string): Promise<AiAnalyzeTaskResponse> {
-    const system = `You are an expert software engineer. Analyze the given development task and respond with ONLY valid JSON matching this exact structure (no prose, no markdown, just raw JSON):
+    const system = `You are an expert software engineer. Analyze the given development task and respond with ONLY valid JSON matching this exact structure (no prose, no markdown):
 {
   "task": "<the original task string>",
   "intent": "<one of: refactor | bugfix | feature | chore | unknown>",
@@ -149,7 +158,7 @@ export class ClaudeAi implements AiClient {
   "risks": ["<risk 1>", "<risk 2>"]
 }`;
 
-    const text = await callClaude(system, `Task: ${input}`, this.apiKey, this.model);
+    const text = await callOpenAi(system, `Task: ${input}`, this.apiKey, this.model);
     const parsed = parseJson<Partial<AiAnalyzeTaskResponse>>(text, {});
     return {
       task: input,
@@ -181,8 +190,7 @@ export class ClaudeAi implements AiClient {
     const system = `You are an expert software engineer creating a step-by-step implementation plan. Respond with ONLY valid JSON:
 {
   "steps": [
-    { "id": "step-1", "title": "<short title>", "description": "<detailed description of what to change and why>" },
-    { "id": "step-2", "title": "<short title>", "description": "<detailed description>" }
+    { "id": "step-1", "title": "<short title>", "description": "<detailed description>" }
   ]
 }
 Keep steps atomic and ordered. Each step should touch one logical concern.`;
@@ -192,16 +200,12 @@ Analysis: ${analysisSummary}
 Repo files (top 50):
 ${fileList}${fileContentsSection}`;
 
-    const text = await callClaude(system, userPrompt, this.apiKey, this.model);
+    const text = await callOpenAi(system, userPrompt, this.apiKey, this.model);
     const parsed = parseJson<Partial<AiGeneratePlanResponse>>(text, { steps: [] });
     const steps = Array.isArray(parsed.steps) ? parsed.steps : [];
 
     if (steps.length === 0) {
-      return {
-        steps: [
-          { id: "step-1", title: "Analyze & implement", description: taskDesc },
-        ],
-      };
+      return { steps: [{ id: "step-1", title: "Analyze & implement", description: taskDesc }] };
     }
     return { steps };
   }
@@ -212,27 +216,25 @@ ${fileList}${fileContentsSection}`;
       title?: string;
       description?: string;
       task?: string;
-      analysis?: AiAnalyzeTaskResponse;
       fileContents?: Record<string, string>;
     };
 
     const stepId = s.id ?? "step-1";
     const fileContentsSection =
       s.fileContents && Object.keys(s.fileContents).length > 0
-        ? `\n\nCurrent file contents (apply changes to these):\n${Object.entries(s.fileContents)
+        ? `\n\nCurrent file contents:\n${Object.entries(s.fileContents)
             .map(([p, c]) => `--- ${p} ---\n${c}`)
             .join("\n\n")}`
-        : "\n\n(No existing file contents provided — create new files as needed.)";
+        : "\n\n(No existing file contents — create new files as needed.)";
 
     const system = `You are an expert software engineer. Generate unified diffs for the given implementation step.
-
 Respond with ONLY valid JSON:
 {
   "stepId": "<step id>",
   "diffs": [
     {
       "path": "<relative file path>",
-      "unifiedDiff": "<valid unified diff content starting with --- a/path and +++ b/path>"
+      "unifiedDiff": "<valid unified diff starting with --- a/path and +++ b/path>"
     }
   ]
 }
@@ -244,16 +246,14 @@ Rules for unified diffs:
 - Lines starting with '-' are removed
 - Lines starting with '+' are added
 - For new files use: --- /dev/null\\n+++ b/<path>
-- For deleted files use: --- a/<path>\\n+++ /dev/null
-- Always include 3 lines of context around changes
-- Make minimal, precise changes`;
+- Always include 3 lines of context around changes`;
 
     const userPrompt = `Task: ${s.task ?? ""}
 Step ID: ${stepId}
 Step Title: ${s.title ?? ""}
 Step Description: ${s.description ?? ""}${fileContentsSection}`;
 
-    const text = await callClaude(system, userPrompt, this.apiKey, this.model);
+    const text = await callOpenAi(system, userPrompt, this.apiKey, this.model);
     const parsed = parseJson<Partial<AiGenerateDiffsResponse>>(text, { stepId, diffs: [] });
     return {
       stepId,
@@ -262,11 +262,7 @@ Step Description: ${s.description ?? ""}${fileContentsSection}`;
   }
 
   async summarizeChanges(diff: unknown): Promise<AiSummarizeChangesResponse> {
-    const d = diff as {
-      diffs?: AiGenerateDiffsResponse[];
-      rawDiff?: string;
-    };
-
+    const d = diff as { diffs?: AiGenerateDiffsResponse[]; rawDiff?: string };
     const diffContent =
       d.rawDiff ??
       (d.diffs ?? [])
@@ -282,7 +278,7 @@ Step Description: ${s.description ?? ""}${fileContentsSection}`;
   ]
 }`;
 
-    const text = await callClaude(system, `Changes:\n${diffContent}`, this.apiKey, this.model);
+    const text = await callOpenAi(system, `Changes:\n${diffContent}`, this.apiKey, this.model);
     const parsed = parseJson<Partial<AiSummarizeChangesResponse>>(text, {
       summary: "",
       filesChanged: [],
@@ -333,7 +329,7 @@ PR Body: ${c.prBody ?? ""}
 Review Comments:
 ${commentsText}${fileContentsSection}`;
 
-    const text = await callClaude(system, userPrompt, this.apiKey, this.model);
+    const text = await callOpenAi(system, userPrompt, this.apiKey, this.model);
     const parsed = parseJson<Partial<AiSuggestFixesResponse>>(text, { suggestedEdits: [] });
     return {
       suggestedEdits: Array.isArray(parsed.suggestedEdits) ? parsed.suggestedEdits : [],
@@ -353,7 +349,9 @@ ${commentsText}${fileContentsSection}`;
       : "";
     const commentsSection =
       ctx.comments && ctx.comments.length > 0
-        ? `\n\nExisting review comments:\n${ctx.comments.map((c) => `[${c.author}${c.path ? ` @ ${c.path}` : ""}]: ${c.body}`).join("\n")}`
+        ? `\n\nExisting review comments:\n${ctx.comments
+            .map((c) => `[${c.author}${c.path ? ` @ ${c.path}` : ""}]: ${c.body}`)
+            .join("\n")}`
         : "";
 
     const system = `You are an expert code reviewer. Review the given pull request thoroughly and respond with ONLY valid JSON:
@@ -374,7 +372,7 @@ Severity guide:
     const userPrompt = `PR Title: ${ctx.prTitle ?? ""}
 PR Description: ${ctx.prBody ?? ""}${diffSection}${commentsSection}`;
 
-    const text = await callClaude(system, userPrompt, this.apiKey, this.model);
+    const text = await callOpenAi(system, userPrompt, this.apiKey, this.model);
     const parsed = parseJson<Partial<AiReviewPRResponse>>(text, {
       summary: "",
       issues: [],
@@ -391,5 +389,4 @@ PR Description: ${ctx.prBody ?? ""}${diffSection}${commentsSection}`;
         : "comment",
     };
   }
-
 }

@@ -3,6 +3,7 @@ import type {
   AiClient,
   AiGenerateDiffsResponse,
   AiGeneratePlanResponse,
+  AiReviewPRResponse,
   AiSuggestFixesResponse,
   AiSummarizeChangesResponse
 } from "./types.js";
@@ -45,6 +46,15 @@ export class MockAi implements AiClient {
 
   async suggestFixes(_comment: unknown): Promise<AiSuggestFixesResponse> {
     return { suggestedEdits: [] };
+  }
+
+  async reviewPR(_context: unknown): Promise<AiReviewPRResponse> {
+    return {
+      summary: "AI review is not available (ANTHROPIC_API_KEY not set). Set the key and retry.",
+      issues: [],
+      positives: [],
+      verdict: "comment",
+    };
   }
 }
 

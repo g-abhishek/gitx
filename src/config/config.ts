@@ -47,10 +47,6 @@ export async function loadConfig(_cwd?: string): Promise<GitxConfig> {
   if (!isGitxConfig(migrated)) {
     throw new GitxError(`Config at ${path} has an unexpected structure. Re-run \`gitx init\`.`, { exitCode: 2 });
   }
-  if (Object.keys(migrated.providers).length === 0) {
-    throw new GitxError("No providers configured. Run `gitx init`.", { exitCode: 2 });
-  }
-
   return migrated;
 }
 
@@ -81,32 +77,54 @@ export async function findConfigPath(_cwd?: string): Promise<string> {
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 /**
- * Migrate old single-provider format:
- *   { provider: "github", token: "..." }
- * to the current multi-provider format:
- *   { providers: { github: { token: "..." } } }
+ * Migrate old config formats to the current structure.
+ *
+ * Handles two legacy shapes:
+ * 1. Single git-provider top-level:  { provider: "github", token: "..." }
+ *    → { providers: { github: { token } } }
+ *
+ * 2. Old single AI config:  { ai: { provider: "claude", apiKey: "..." } }
+ *    → { aiProviders: { claude: { apiKey } }, defaultAiProvider: "claude" }
+ *    (and removes the old `ai` field)
  */
 function migrateLegacyConfig(value: unknown): unknown {
   if (typeof value !== "object" || value === null) return value;
-  const rec = value as Record<string, unknown>;
+  const rec = { ...(value as Record<string, unknown>) };
 
-  // Already in new format
-  if (typeof rec["providers"] === "object" && rec["providers"] !== null) return value;
-
-  const provider = rec["provider"];
-  const token = rec["token"];
-  const defaultBranch = rec["defaultBranch"];
-
-  if (
-    (provider === "github" || provider === "gitlab" || provider === "azure") &&
-    typeof token === "string" &&
-    token.trim().length > 0
-  ) {
-    return {
-      providers: { [provider as string]: { token } },
-      ...(typeof defaultBranch === "string" ? { defaultBranch } : {}),
-    };
+  // 1. Migrate flat single-provider format → providers object
+  if (!(typeof rec["providers"] === "object" && rec["providers"] !== null)) {
+    const provider = rec["provider"];
+    const token = rec["token"];
+    const defaultBranch = rec["defaultBranch"];
+    if (
+      (provider === "github" || provider === "gitlab" || provider === "azure") &&
+      typeof token === "string" &&
+      token.trim().length > 0
+    ) {
+      return {
+        providers: { [provider as string]: { token } },
+        ...(typeof defaultBranch === "string" ? { defaultBranch } : {}),
+      };
+    }
   }
 
-  return value;
+  // 2. Migrate old ai: { provider, apiKey } → aiProviders + defaultAiProvider
+  if (rec["ai"] && !rec["aiProviders"]) {
+    const ai = rec["ai"] as Record<string, unknown>;
+    const aiProv = ai["provider"];
+    const aiKey = ai["apiKey"];
+    const aiModel = ai["model"];
+    if (typeof aiProv === "string") {
+      rec["aiProviders"] = {
+        [aiProv]: {
+          ...(typeof aiKey === "string" && aiKey.trim() ? { apiKey: aiKey } : {}),
+          ...(typeof aiModel === "string" && aiModel.trim() ? { model: aiModel } : {}),
+        },
+      };
+      rec["defaultAiProvider"] = aiProv;
+      delete rec["ai"];
+    }
+  }
+
+  return rec;
 }

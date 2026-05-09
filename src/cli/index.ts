@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { registerInitCommand } from "./commands/init.js";
+import { registerCommitCommand } from "./commands/commit.js";
 import { registerImplementCommand } from "./commands/implement.js";
 import { registerPrCommands } from "./commands/pr/index.js";
 import { registerConfigCommand } from "./commands/config.js";
@@ -15,6 +16,7 @@ export async function runCli(argv: string[]): Promise<void> {
     .version("0.1.3");
 
   registerInitCommand(program);
+  registerCommitCommand(program);
   registerConfigCommand(program);
   registerImplementCommand(program);
   registerPrCommands(program);

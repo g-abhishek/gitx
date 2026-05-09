@@ -131,6 +131,22 @@ export class GitHubProvider implements GitProvider {
     }
   }
 
+
+  async getPRDiff(repoSlug: string, prNumber: number): Promise<string> {
+    try {
+      const { data } = await withRetry(() =>
+        this.http.get<string>(`/repos/${repoSlug}/pulls/${prNumber}`, {
+          headers: { Accept: "application/vnd.github.diff" },
+          responseType: "text",
+        })
+      );
+      return typeof data === "string" ? data : "";
+    } catch (err) {
+      // Non-fatal — review can proceed without diff
+      return "";
+    }
+  }
+
   async getDefaultBranch(repoSlug: string): Promise<string> {
     try {
       const { data } = await withRetry(() => this.http.get<GhRepo>(`/repos/${repoSlug}`));

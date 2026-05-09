@@ -19,6 +19,8 @@ export type {
   AiSuggestFixesResponse,
 } from "./ai/types.js";
 export { ClaudeAi } from "./ai/claudeAi.js";
+export { ClaudeCliAi } from "./ai/claudeCliAi.js";
+export { OpenAiAi } from "./ai/openAiAi.js";
 export { MockAi } from "./ai/mockAi.js";
 
 // ─── Provider layer ───────────────────────────────────────────────────────────

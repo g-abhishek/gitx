@@ -22,6 +22,16 @@ export function registerPrFixCommentsCommand(pr: Command): void {
       const ctx = await gitx.getRepoContext();
       logger.info(`🩹 Fixing review comments on PR #${prNumber} (${ctx.repoSlug})…\n`);
 
+      // ── AI availability warning ────────────────────────────────────────────
+      if (!process.env["ANTHROPIC_API_KEY"]) {
+        logger.warn(
+          "⚠️  ANTHROPIC_API_KEY is not set — AI fix suggestions will be empty.\n" +
+          "   Export it first: export ANTHROPIC_API_KEY=sk-ant-..."
+        );
+        return;
+      }
+
+
       if (!options.dryRun) {
         const { proceed } = await inquirer.prompt<{ proceed: boolean }>([
           {

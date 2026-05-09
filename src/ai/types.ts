@@ -36,5 +36,18 @@ export interface AiClient {
   generateDiffs(step: unknown): Promise<AiGenerateDiffsResponse>;
   summarizeChanges(diff: unknown): Promise<AiSummarizeChangesResponse>;
   suggestFixes(comment: unknown): Promise<AiSuggestFixesResponse>;
+  reviewPR(context: unknown): Promise<AiReviewPRResponse>;
+}
+
+export interface AiReviewPRResponse {
+  summary: string;
+  issues: Array<{
+    severity: "critical" | "warning" | "suggestion";
+    description: string;
+    file?: string;
+    line?: number;
+  }>;
+  positives: string[];
+  verdict: "approve" | "request_changes" | "comment";
 }
 
