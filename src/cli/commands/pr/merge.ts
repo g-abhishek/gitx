@@ -127,11 +127,41 @@ export function registerPrMergeCommand(pr: Command): void {
 
       // ── Merge via API ──────────────────────────────────────────────────────
       const mergeSpinner = ora(`Merging PR #${prNumber} (${method})…`).start();
-      await provider.mergePR(ctx.repoSlug, prNumber, {
-        method,
-        commitTitle: pr_.title,
-        deleteSourceBranch: opts.deleteBranch,
-      });
+      try {
+        await provider.mergePR(ctx.repoSlug, prNumber, {
+          method,
+          commitTitle: pr_.title,
+          deleteSourceBranch: opts.deleteBranch,
+        });
+      } catch (err) {
+        mergeSpinner.fail("Merge failed.");
+        const msg = err instanceof Error ? err.message : String(err);
+
+        // GitHub 405 / GitLab 405/406 = merge conflicts or branch not mergeable
+        const isConflict =
+          msg.includes("merge conflict") ||
+          msg.includes("405") ||
+          msg.includes("not mergeable") ||
+          msg.toLowerCase().includes("conflict");
+
+        if (isConflict) {
+          logger.error(`\n❌ PR #${prNumber} has merge conflicts.\n`);
+          logger.info(`  The branch "${pr_.head}" is out of sync with "${pr_.base}".`);
+          logger.info(`  Sync and resolve conflicts, then retry:\n`);
+          logger.info(`    gitx sync              ← rebase onto ${pr_.base} and push`);
+          logger.info(`    gitx pr merge ${prNumber}    ← retry after sync\n`);
+          logger.info(`  Or resolve manually:`);
+          logger.info(`    git fetch origin`);
+          logger.info(`    git rebase origin/${pr_.base}`);
+          logger.info(`    # fix conflicts in editor, then:`);
+          logger.info(`    git add . && git rebase --continue`);
+          logger.info(`    git push --force-with-lease`);
+          process.exitCode = 1;
+          return;
+        }
+
+        throw err; // re-throw non-conflict errors
+      }
       mergeSpinner.succeed(`PR #${prNumber} merged ✓`);
 
       // ── Delete source branch locally if requested ──────────────────────────
