@@ -16,4 +16,3 @@ export function registerPrCommands(program: Command): void {
   registerPrFixCommentsCommand(pr);
   registerPrCloseCommand(pr);
 }
-

@@ -85,4 +85,3 @@ export interface AiReviewPRResponse {
   positives: string[];
   verdict: "approve" | "request_changes" | "comment";
 }
-
