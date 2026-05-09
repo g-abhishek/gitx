@@ -1,118 +1,130 @@
-import { access, readFile, writeFile } from "node:fs/promises";
+/**
+ * Config system — single source of truth: ~/.gitxrc
+ *
+ * All reads and writes go to exactly one file: ~/.gitxrc
+ * No local project-level config files are searched or created.
+ * This eliminates the class of bugs where a stale local config
+ * silently shadows the global one.
+ */
+
+import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 import type { GitxConfig } from "../types/config.js";
 import { GitxError } from "../utils/errors.js";
 import { isGitxConfig } from "./schema.js";
 
-export const CONFIG_FILES = ["gitx.config.json", ".gitxrc"] as const;
+// ─── Public API ───────────────────────────────────────────────────────────────
 
-export async function loadConfig(cwd = process.cwd()): Promise<GitxConfig> {
-  const path = await findConfigPath(cwd);
-  if (!path) {
+/** The one and only config file path. Always ~/.gitxrc */
+export function getConfigPath(): string {
+  const home = homedir();
+  if (!home) throw new GitxError("Could not determine home directory.", { exitCode: 2 });
+  return resolve(home, ".gitxrc");
+}
+
+/** Load config from ~/.gitxrc */
+export async function loadConfig(_cwd?: string): Promise<GitxConfig> {
+  const path = getConfigPath();
+  let raw: string;
+  try {
+    raw = await readFile(path, "utf8");
+  } catch {
     throw new GitxError(
-      "No gitx config found. Run `gitx init` first (writes ~/.gitxrc), or add gitx.config.json/.gitxrc in your repo.",
-      { exitCode: 2 },
+      `No gitx config found at ${path}. Run \`gitx init\` to set up your credentials.`,
+      { exitCode: 2 }
     );
   }
-  return readConfigFile(path);
-}
 
-export async function saveConfig(config: GitxConfig, cwd = process.cwd()): Promise<void> {
-  // Default to global config for a smoother UX: `gitx init` once, then run gitx anywhere.
-  const fullPath = getGlobalConfigPath();
-  const contents = JSON.stringify(config, null, 2) + "\n";
-  await writeFile(fullPath, contents, "utf8");
-}
-
-export async function saveLocalConfig(config: GitxConfig, cwd = process.cwd()): Promise<void> {
-  const fullPath = resolve(cwd, "gitx.config.json");
-  const contents = JSON.stringify(config, null, 2) + "\n";
-  await writeFile(fullPath, contents, "utf8");
-}
-
-export function getGlobalConfigPath(): string {
-  return resolve(getHomeDir(), ".gitxrc");
-}
-
-async function exists(path: string): Promise<boolean> {
+  let parsed: unknown;
   try {
-    await access(path);
-    return true;
+    parsed = JSON.parse(raw);
   } catch {
-    return false;
+    throw new GitxError(`Config file at ${path} is not valid JSON. Fix or delete it and re-run \`gitx init\`.`, { exitCode: 2 });
   }
-}
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
-async function readConfigFile(path: string): Promise<GitxConfig> {
-  const raw = await readFile(path, "utf8");
-  const parsed: unknown = JSON.parse(raw);
   const migrated = migrateLegacyConfig(parsed);
-
   if (!isGitxConfig(migrated)) {
-    throw new GitxError(`Invalid config in ${path}.`, { exitCode: 2 });
+    throw new GitxError(`Config at ${path} has an unexpected structure. Re-run \`gitx init\`.`, { exitCode: 2 });
   }
-
-  if (Object.keys(migrated.providers).length === 0) {
-    throw new GitxError("No providers configured. Run `gitx init`.", { exitCode: 2 });
-  }
-
   return migrated;
 }
 
+/** Save config to ~/.gitxrc. Returns the path written. */
+export async function saveConfig(config: GitxConfig, _cwd?: string): Promise<string> {
+  const path = getConfigPath();
+  await writeFile(path, JSON.stringify(config, null, 2) + "\n", "utf8");
+  return path;
+}
+
+// ─── Legacy compat (kept so init.ts still compiles) ──────────────────────────
+
+/** @deprecated Use saveConfig — writes to ~/.gitxrc */
+export async function saveLocalConfig(config: GitxConfig, _cwd?: string): Promise<void> {
+  await saveConfig(config);
+}
+
+/** @deprecated Use getConfigPath */
+export function getGlobalConfigPath(): string {
+  return getConfigPath();
+}
+
+/** @deprecated No longer needed — always returns getConfigPath() */
+export async function findConfigPath(_cwd?: string): Promise<string> {
+  return getConfigPath();
+}
+
+// ─── Internal helpers ─────────────────────────────────────────────────────────
+
+/**
+ * Migrate old config formats to the current structure.
+ *
+ * Handles two legacy shapes:
+ * 1. Single git-provider top-level:  { provider: "github", token: "..." }
+ *    → { providers: { github: { token } } }
+ *
+ * 2. Old single AI config:  { ai: { provider: "claude", apiKey: "..." } }
+ *    → { aiProviders: { claude: { apiKey } }, defaultAiProvider: "claude" }
+ *    (and removes the old `ai` field)
+ */
 function migrateLegacyConfig(value: unknown): unknown {
-  if (!isRecord(value)) return value;
-  if (isRecord(value["providers"])) return value;
+  if (typeof value !== "object" || value === null) return value;
+  const rec = { ...(value as Record<string, unknown>) };
 
-  const provider = value["provider"];
-  const token = value["token"];
-  const defaultBranch = value["defaultBranch"];
-
-  if (
-    (provider === "github" || provider === "gitlab" || provider === "azure") &&
-    typeof token === "string" &&
-    token.trim().length > 0
-  ) {
-    return {
-      providers: { [provider]: { token } },
-      ...(typeof defaultBranch === "string" ? { defaultBranch } : {})
-    };
-  }
-
-  return value;
-}
-
-export async function findConfigPath(cwd = process.cwd()): Promise<string | undefined> {
-  // 1) Search upward from cwd for project-level config
-  let current = resolve(cwd);
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    for (const filename of CONFIG_FILES) {
-      const fullPath = resolve(current, filename);
-      if (await exists(fullPath)) return fullPath;
+  // 1. Migrate flat single-provider format → providers object
+  if (!(typeof rec["providers"] === "object" && rec["providers"] !== null)) {
+    const provider = rec["provider"];
+    const token = rec["token"];
+    const defaultBranch = rec["defaultBranch"];
+    if (
+      (provider === "github" || provider === "gitlab" || provider === "azure") &&
+      typeof token === "string" &&
+      token.trim().length > 0
+    ) {
+      return {
+        providers: { [provider as string]: { token } },
+        ...(typeof defaultBranch === "string" ? { defaultBranch } : {}),
+      };
     }
-
-    const parent = resolve(current, "..");
-    if (parent === current) break;
-    current = parent;
   }
 
-  // 2) Fallback to global config in home directory
-  const home = getHomeDir();
-  const globalRc = resolve(home, ".gitxrc");
-  if (await exists(globalRc)) return globalRc;
-  const globalJson = resolve(home, "gitx.config.json");
-  if (await exists(globalJson)) return globalJson;
+  // 2. Migrate old ai: { provider, apiKey } → aiProviders + defaultAiProvider
+  if (rec["ai"] && !rec["aiProviders"]) {
+    const ai = rec["ai"] as Record<string, unknown>;
+    const aiProv = ai["provider"];
+    const aiKey = ai["apiKey"];
+    const aiModel = ai["model"];
+    if (typeof aiProv === "string") {
+      rec["aiProviders"] = {
+        [aiProv]: {
+          ...(typeof aiKey === "string" && aiKey.trim() ? { apiKey: aiKey } : {}),
+          ...(typeof aiModel === "string" && aiModel.trim() ? { model: aiModel } : {}),
+        },
+      };
+      rec["defaultAiProvider"] = aiProv;
+      delete rec["ai"];
+    }
+  }
 
-  return undefined;
-}
-
-function getHomeDir(): string {
-  const home = homedir();
-  if (!home) throw new GitxError("Could not determine home directory for config.", { exitCode: 2 });
-  return home;
+  return rec;
 }

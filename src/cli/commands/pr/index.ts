@@ -3,6 +3,7 @@ import { registerPrListCommand } from "./list.js";
 import { registerPrCreateCommand } from "./create.js";
 import { registerPrReviewCommand } from "./review.js";
 import { registerPrFixCommentsCommand } from "./fixComments.js";
+import { registerPrCloseCommand } from "./close.js";
 
 export function registerPrCommands(program: Command): void {
   const pr = program.command("pr").description("🔀 Pull request commands");
@@ -11,5 +12,6 @@ export function registerPrCommands(program: Command): void {
   registerPrCreateCommand(pr);
   registerPrReviewCommand(pr);
   registerPrFixCommentsCommand(pr);
+  registerPrCloseCommand(pr);
 }
 
