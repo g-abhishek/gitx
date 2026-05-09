@@ -4,6 +4,7 @@ import { GitxError } from "../utils/errors.js";
 import type {
   CreatePrOptions,
   GitProvider,
+  MergePrOptions,
   PullRequest,
   PullRequestComment,
 } from "./base.js";
@@ -144,6 +145,18 @@ export class GitHubProvider implements GitProvider {
     } catch (err) {
       // Non-fatal — review can proceed without diff
       return "";
+    }
+  }
+
+  async mergePR(repoSlug: string, prNumber: number, opts: MergePrOptions): Promise<void> {
+    try {
+      await this.http.put(`/repos/${repoSlug}/pulls/${prNumber}/merge`, {
+        merge_method: opts.method,                    // "squash" | "merge" | "rebase"
+        commit_title: opts.commitTitle,
+        commit_message: opts.commitMessage ?? "",
+      });
+    } catch (err) {
+      throw wrapGhError(err, `merge PR #${prNumber}`);
     }
   }
 

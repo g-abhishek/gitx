@@ -4,6 +4,7 @@ import { GitxError } from "../utils/errors.js";
 import type {
   CreatePrOptions,
   GitProvider,
+  MergePrOptions,
   PullRequest,
   PullRequestComment,
 } from "./base.js";
@@ -135,6 +136,21 @@ export class GitLabProvider implements GitProvider {
       return data.map((d) => `--- a/${d.old_path}\n+++ b/${d.new_path}\n${d.diff}`).join("\n\n");
     } catch {
       return "";
+    }
+  }
+
+  async mergePR(repoSlug: string, prNumber: number, opts: MergePrOptions): Promise<void> {
+    try {
+      await this.http.put(
+        `/projects/${this.enc(repoSlug)}/merge_requests/${prNumber}/merge`,
+        {
+          squash: opts.method === "squash",
+          merge_commit_message: opts.commitTitle ?? undefined,
+          should_remove_source_branch: opts.deleteSourceBranch ?? false,
+        }
+      );
+    } catch (err) {
+      throw wrapGlError(err, `merge MR !${prNumber}`);
     }
   }
 

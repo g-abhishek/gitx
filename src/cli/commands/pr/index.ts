@@ -4,12 +4,14 @@ import { registerPrCreateCommand } from "./create.js";
 import { registerPrReviewCommand } from "./review.js";
 import { registerPrFixCommentsCommand } from "./fixComments.js";
 import { registerPrCloseCommand } from "./close.js";
+import { registerPrMergeCommand } from "./merge.js";
 
 export function registerPrCommands(program: Command): void {
   const pr = program.command("pr").description("🔀 Pull request commands");
 
   registerPrListCommand(pr);
   registerPrCreateCommand(pr);
+  registerPrMergeCommand(pr);
   registerPrReviewCommand(pr);
   registerPrFixCommentsCommand(pr);
   registerPrCloseCommand(pr);
