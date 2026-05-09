@@ -23,14 +23,20 @@ const execFileAsync = promisify(execFile);
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
-async function callClaudeCli(systemPrompt: string, userPrompt: string): Promise<string> {
+async function callClaudeCli(
+  systemPrompt: string,
+  userPrompt: string,
+  opts: { timeoutMs?: number; maxOutputChars?: number } = {}
+): Promise<string> {
+  const timeoutMs = opts.timeoutMs ?? 120_000;
+  const maxOutputChars = opts.maxOutputChars ?? 12_000;
   const combined = `<system>\n${systemPrompt}\n</system>\n\n${userPrompt}`;
 
   let stdout: string;
   try {
     const result = await execFileAsync("claude", ["-p", combined], {
-      timeout: 120_000,
-      maxBuffer: 10 * 1024 * 1024,
+      timeout: timeoutMs,
+      maxBuffer: 20 * 1024 * 1024,
     });
     stdout = result.stdout;
   } catch (err: unknown) {
@@ -42,12 +48,13 @@ async function callClaudeCli(systemPrompt: string, userPrompt: string): Promise<
       );
     }
     if (e.killed) {
-      throw new GitxError("Claude CLI timed out (>120s).", { exitCode: 1 });
+      const secs = Math.round(timeoutMs / 1000);
+      throw new GitxError(`Claude CLI timed out (>${secs}s). Try reducing the number of changed files or use --no-comment.`, { exitCode: 1 });
     }
     throw new GitxError(`Claude CLI error: ${e.message ?? String(err)}`, { exitCode: 1 });
   }
 
-  return stdout.trim().slice(0, 12_000);
+  return stdout.trim().slice(0, maxOutputChars);
 }
 
 function extractJson(text: string): string {
@@ -359,7 +366,11 @@ Respond with ONLY valid JSON (no markdown fences):
     context: Parameters<import("./types.js").AiClient["reviewPRDetailed"]>[0]
   ): Promise<import("./types.js").AiDetailedReviewResponse> {
     const { buildSeniorReviewSystem, buildSeniorReviewPrompt, parseSeniorReview } = await import("./reviewHelpers.js");
-    const text = await callClaudeCli(buildSeniorReviewSystem(), buildSeniorReviewPrompt(context));
+    const text = await callClaudeCli(
+      buildSeniorReviewSystem(),
+      buildSeniorReviewPrompt(context),
+      { timeoutMs: 300_000, maxOutputChars: 60_000 }  // 5 min timeout, large output for full review JSON
+    );
     return parseSeniorReview(text);
   }
 }

@@ -4,11 +4,33 @@
  * Shared logic used by the `pr review` and `pr fix-comments` CLI commands.
  */
 
+import ora from "ora";
 import type { Gitx } from "../core/gitx.js";
 import type { PullRequest, PullRequestComment } from "../providers/base.js";
 import { createProvider } from "../providers/factory.js";
 import { readRepoFile, listTrackedFiles } from "../utils/gitOps.js";
 import { logger } from "../logger/logger.js";
+
+// Files that add no review value — skip them even if they appear in the diff
+const SKIP_FILE_PATTERNS = [
+  /package-lock\.json$/,
+  /yarn\.lock$/,
+  /pnpm-lock\.yaml$/,
+  /bun\.lockb$/,
+  /\.lock$/,
+  /dist\//,
+  /build\//,
+  /\.min\.(js|css)$/,
+  /\.map$/,
+  /node_modules\//,
+  /\.d\.ts$/,     // generated TypeScript declarations
+  /generated\//,
+  /migrations\/.*\.sql$/,
+];
+
+function isReviewableFile(path: string): boolean {
+  return !SKIP_FILE_PATTERNS.some((re) => re.test(path));
+}
 
 // ─── Review workflow ──────────────────────────────────────────────────────────
 
@@ -17,6 +39,10 @@ export interface ReviewResult {
   comments: PullRequestComment[];
   aiSummary: string;
   review?: import("../ai/types.js").AiDetailedReviewResponse;
+  /** true = review was actually posted to the hosting provider */
+  reviewPosted: boolean;
+  /** How inline comments were delivered: formal inline, plain comments, or not posted */
+  inlineDelivery: "inline" | "plain-comments" | "none";
 }
 
 /**
@@ -92,56 +118,73 @@ export async function runReviewWorkflow(
   const provider = createProvider(ctx);
   const cwd = gitx.cwd;
 
-  logger.info(`🔍 Fetching PR #${prNumber}…`);
+  const fetchSpinner = ora("Fetching PR info, diff and comments…").start();
   const pr = await provider.getPR(ctx.repoSlug, prNumber);
-
-  logger.info("💬 Fetching diff and comments…");
   const [comments, diff] = await Promise.all([
     provider.getPRComments(ctx.repoSlug, prNumber),
     provider.getPRDiff(ctx.repoSlug, prNumber),
   ]);
+  fetchSpinner.succeed(`PR #${prNumber}: "${pr.title}"  (${pr.head} → ${pr.base})`);
 
   // ── Build codebase context ─────────────────────────────────────────────────
-  logger.info("📂 Building codebase context…");
+  const ctxSpinner = ora("Building codebase context from changed files…").start();
   const allTracked = await listTrackedFiles(cwd);
-  const changedPaths = parseChangedPathsFromDiff(diff);
+  const allChangedPaths = parseChangedPathsFromDiff(diff);
+
+  // Filter out lockfiles / generated files — they waste tokens and add no review value
+  const changedPaths = allChangedPaths.filter(isReviewableFile).slice(0, 8);
+  const skippedCount = allChangedPaths.length - changedPaths.length;
 
   // Read full content of changed files
   const changedFiles: Record<string, string> = {};
-  for (const p of changedPaths.slice(0, 12)) {
+  for (const p of changedPaths) {
     const content = await readRepoFile(p, cwd);
     if (content) changedFiles[p] = content;
   }
 
   // Read supporting context files (imported by the changed files)
-  const ctxPaths = await findContextFiles(changedPaths, allTracked, cwd, 8);
+  const ctxPaths = await findContextFiles(changedPaths, allTracked, cwd, 5);
   const contextFiles: Record<string, string> = {};
   for (const p of ctxPaths) {
     const content = await readRepoFile(p, cwd);
     if (content) contextFiles[p] = content;
   }
 
-  logger.info(
-    `🧠 Running senior-dev AI review (${changedPaths.length} changed files, ${ctxPaths.length} context files)…`
+  const skippedNote = skippedCount > 0 ? `, ${skippedCount} lock/generated files skipped` : "";
+  ctxSpinner.succeed(
+    `Context: ${changedPaths.length} changed files, ${ctxPaths.length} context files${skippedNote}`
   );
 
-  const review = await gitx.ai.reviewPRDetailed({
-    prTitle: pr.title,
-    prBody: pr.body,
-    author: pr.author,
-    headBranch: pr.head,
-    baseBranch: pr.base,
-    diff,
-    changedFiles,
-    contextFiles,
-    repoFileList: allTracked,
-    existingComments: comments.map((c) => ({
-      author: c.author,
-      body: c.body,
-      path: c.path,
-      line: c.line,
-    })),
-  });
+  const reviewSpinner = ora(
+    `Running senior-dev AI review… (this may take up to 5 min for large PRs)`
+  ).start();
+
+  let review: Awaited<ReturnType<typeof gitx.ai.reviewPRDetailed>>;
+  try {
+    review = await gitx.ai.reviewPRDetailed({
+      prTitle: pr.title,
+      prBody: pr.body,
+      author: pr.author,
+      headBranch: pr.head,
+      baseBranch: pr.base,
+      diff,
+      changedFiles,
+      contextFiles,
+      repoFileList: allTracked,
+      existingComments: comments.map((c) => ({
+        author: c.author,
+        body: c.body,
+        path: c.path,
+        line: c.line,
+      })),
+    });
+    reviewSpinner.succeed(
+      `Review complete — verdict: ${review.verdict}  |  ${review.inlineComments.length} inline comment(s)`
+    );
+  } catch (err) {
+    reviewSpinner.fail("AI review failed.");
+    throw err;
+  }
 
   // ── Build the formatted review body (for the summary comment) ─────────────
   const verdictIcon =
@@ -179,23 +222,42 @@ export async function runReviewWorkflow(
   ].join("\n");
 
   // ── Post the formal review (inline comments + verdict) ────────────────────
+  let reviewPosted = false;
+  let inlineDelivery: ReviewResult["inlineDelivery"] = "none";
+
   if (postComment) {
-    logger.info("📝 Submitting formal PR review with inline comments…");
-    await provider.submitPRReview(ctx.repoSlug, prNumber, {
-      body: summaryBody,
-      event: review.verdict,
-      comments: review.inlineComments.map((c) => ({
-        path: c.path,
-        line: c.line,
-        body: c.suggestion
-          ? `${c.body}\n\n**Suggestion:**\n\`\`\`suggestion\n${c.suggestion}\n\`\`\``
-          : c.body,
-      })),
-    });
-    logger.success("Review submitted to PR.");
+    const inlineCount = review.inlineComments.length;
+    const postSpinner = ora(
+      `Submitting review to PR${inlineCount > 0 ? ` with ${inlineCount} inline comment(s)` : ""}…`
+    ).start();
+    try {
+      await provider.submitPRReview(ctx.repoSlug, prNumber, {
+        body: summaryBody,
+        event: review.verdict,
+        comments: review.inlineComments.map((c) => ({
+          path: c.path,
+          line: c.line,
+          body: c.suggestion
+            ? `${c.body}\n\n**Suggestion:**\n\`\`\`suggestion\n${c.suggestion}\n\`\`\``
+            : c.body,
+        })),
+      });
+      reviewPosted = true;
+      // Determine how inline comments were delivered.
+      // GitHub's submitPRReview will attempt inline first, then fall back to
+      // plain comments. We can't detect which path was taken from here, so
+      // we report "inline" optimistically — the user sees the real result on GitHub.
+      inlineDelivery = inlineCount > 0 ? "inline" : "none";
+      postSpinner.succeed(
+        `Review submitted to PR.${inlineCount > 0 ? ` (${inlineCount} inline comment(s) — see PR for delivery method)` : ""}`
+      );
+    } catch (err) {
+      postSpinner.fail(`Could not post review to PR: ${String((err as Error).message ?? err)}`);
+      // Don't rethrow — still return the review so the user can see it locally
+    }
   }
 
-  return { pr, comments, aiSummary: summaryBody, review };
+  return { pr, comments, aiSummary: summaryBody, review, reviewPosted, inlineDelivery };
 }
 
 // ─── Fix-comments workflow ────────────────────────────────────────────────────

@@ -28,7 +28,7 @@ export function registerPrReviewCommand(pr: Command): void {
 
       const postComment = options.comment !== false;
 
-      logger.info(`\n🧐 Running senior-dev AI review on PR #${prNumber}…\n`);
+      logger.info(`\n🧐 Senior-dev AI review — PR #${prNumber}\n`);
 
       let result: Awaited<ReturnType<typeof runReviewWorkflow>>;
       try {
@@ -129,12 +129,25 @@ export function registerPrReviewCommand(pr: Command): void {
       }
 
       // ── Status ────────────────────────────────────────────────────────────
-      if (postComment) {
-        logger.success(
-          `✅ Review submitted to PR with ${review.inlineComments.length} inline comment(s).`
-        );
-      } else {
+      if (!postComment) {
         logger.info("ℹ️  Review shown locally only (--no-comment).");
+      } else if (result.reviewPosted) {
+        const inlineCount = review.inlineComments.length;
+        if (inlineCount > 0) {
+          logger.success(
+            `✅ Review posted to PR. ${inlineCount} inline comment(s) — check the PR to see delivery method.`
+          );
+          logger.info(
+            `   (If lines were outside the diff, comments were posted as plain PR comments instead.)`
+          );
+        } else {
+          logger.success("✅ Review posted to PR.");
+        }
+      } else {
+        logger.warn(
+          "⚠️  Review could not be posted to the PR (see error above).\n" +
+          "   The full review is shown above — you can copy it manually."
+        );
       }
     });
 }

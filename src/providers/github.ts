@@ -171,15 +171,12 @@ export class GitHubProvider implements GitProvider {
   }
 
   async submitPRReview(repoSlug: string, prNumber: number, opts: SubmitReviewOptions): Promise<void> {
-    // Map our event string to GitHub's enum
     const eventMap: Record<SubmitReviewOptions["event"], string> = {
       approve: "APPROVE",
       request_changes: "REQUEST_CHANGES",
       comment: "COMMENT",
     };
 
-    // Build inline comments — GitHub requires `line` + `side` (newer diff hunk API)
-    // We use `line` (actual line in the new file) + `side: "RIGHT"`.
     const ghComments = (opts.comments ?? [])
       .filter((c) => c.line > 0)
       .map((c: ReviewComment) => ({
@@ -189,34 +186,55 @@ export class GitHubProvider implements GitProvider {
         body: c.body,
       }));
 
+    // ── Attempt 1: formal review with all inline comments ─────────────────
+    // GitHub only accepts inline comments on lines that actually appear in
+    // the diff (changed lines + context lines within hunks). If any comment
+    // references a line outside the diff, GitHub rejects the entire request
+    // with 422 "Line could not be resolved".
+    if (ghComments.length > 0) {
+      try {
+        await this.http.post(`/repos/${repoSlug}/pulls/${prNumber}/reviews`, {
+          body: opts.body,
+          event: eventMap[opts.event],
+          comments: ghComments,
+        });
+        return; // success — all inline comments accepted
+      } catch (err) {
+        if (!isAxiosError(err) || err.response?.status !== 422) {
+          throw wrapGhError(err, `submit review on PR #${prNumber}`);
+        }
+        // 422 → some inline comments are on lines outside the diff.
+        // Fall through to attempt 2.
+      }
+    }
+
+    // ── Attempt 2: formal review without inline comments ──────────────────
+    // Posts the verdict (APPROVE / REQUEST_CHANGES / COMMENT) and summary
+    // body as a proper review, then posts each inline comment as a separate
+    // plain PR comment so the text is never lost.
     try {
       await this.http.post(`/repos/${repoSlug}/pulls/${prNumber}/reviews`, {
         body: opts.body,
         event: eventMap[opts.event],
-        comments: ghComments,
+        // Omit `comments` entirely — avoid sending an empty array which
+        // can also trigger a 422 on some GitHub versions.
       });
-    } catch (err) {
-      // Inline comments can fail if line numbers are off (e.g. line not in diff).
-      // Fall back to a plain issue comment so the review is never silently lost.
-      if (isAxiosError(err) && err.response?.status === 422 && ghComments.length > 0) {
-        // Retry without inline comments
-        try {
-          await this.http.post(`/repos/${repoSlug}/pulls/${prNumber}/reviews`, {
-            body: opts.body,
-            event: eventMap[opts.event],
-            comments: [],
-          });
-          // Post inline comments individually as plain comments
-          for (const c of ghComments) {
-            const fallback = `**\`${c.path}:${c.line}\`**\n\n${c.body}`;
-            await this.http.post(`/repos/${repoSlug}/issues/${prNumber}/comments`, { body: fallback }).catch(() => {});
-          }
-          return;
-        } catch {
-          // ignore secondary failure
-        }
-      }
-      throw wrapGhError(err, `submit review on PR #${prNumber}`);
+    } catch {
+      // ── Attempt 3: plain issue comment (last resort) ───────────────────
+      // If even a comment-free review fails (permissions, draft PR, etc.),
+      // fall back to a regular PR comment so the review text still lands.
+      await this.http.post(`/repos/${repoSlug}/issues/${prNumber}/comments`, {
+        body: opts.body,
+      }).catch((e: unknown) => {
+        throw wrapGhError(e, `submit review on PR #${prNumber}`);
+      });
+    }
+
+    // Post each inline comment as a plain PR comment with file:line prefix
+    for (const c of ghComments) {
+      const body = `📍 **\`${c.path}:${c.line}\`**\n\n${c.body}`;
+      await this.http.post(`/repos/${repoSlug}/issues/${prNumber}/comments`, { body })
+        .catch(() => {}); // best-effort — don't abort if one comment fails
     }
   }
 
