@@ -26,21 +26,14 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve as resolvePath } from "node:path";
-<<<<<<< HEAD
 import { confirm, select } from "@inquirer/prompts";
-=======
-import { confirm } from "@inquirer/prompts";
->>>>>>> origin/main
 import { logger } from "../../logger/logger.js";
 import { getCurrentBranch, detectBaseBranch } from "../../utils/gitOps.js";
 import { isInsideGitRepo } from "../../utils/git.js";
 import { GitxError } from "../../utils/errors.js";
 import { Gitx } from "../../core/gitx.js";
-<<<<<<< HEAD
 import { createProvider } from "../../providers/factory.js";
 import { runAddressWorkflow } from "../../workflows/prAddress.js";
-=======
->>>>>>> origin/main
 
 const execFileAsync = promisify(execFile);
 
@@ -208,15 +201,12 @@ export function registerSyncCommand(program: Command): void {
         return;
       }
 
-<<<<<<< HEAD
       // ── Check for unresolved PR review comments BEFORE syncing ────────────
       // If the current branch has an open PR with unresolved inline comments,
       // offer to resolve them now. Fixes are committed onto the branch; the
       // sync then rebases/merges and pushes everything together.
       await checkAndOfferAddressComments(cwd, head);
 
-=======
->>>>>>> origin/main
       logger.info(`\n🔄 Syncing  ${head}  onto  origin/${base}\n`);
 
       // Fetch latest
@@ -399,7 +389,6 @@ export function registerSyncCommand(program: Command): void {
     });
 }
 
-<<<<<<< HEAD
 /**
  * Before syncing, look up any open PR for the current branch.
  * If it has unresolved inline review comments, ask the user:
@@ -490,8 +479,6 @@ async function checkAndOfferAddressComments(cwd: string, currentBranch: string):
   }
 }
 
-=======
->>>>>>> origin/main
 async function pushAfterSync(cwd: string, forceWithLease = false): Promise<void> {
   // Rebase rewrites history → requires --force-with-lease.
   // Merge does not rewrite history → plain push is fine.
