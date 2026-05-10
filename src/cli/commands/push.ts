@@ -46,7 +46,7 @@ export function registerPushCommand(program: Command): void {
 
       // ── Guards ─────────────────────────────────────────────────────────────
       if (!(await isInsideGitRepo(cwd))) {
-        throw new GitxError("Not inside a git repository.", { exitCode: 2 });
+        throw new GitxError("Not inside a git repository. cd into your project folder first.", { exitCode: 2 });
       }
 
       const dirty = await isWorkingTreeDirty(cwd);

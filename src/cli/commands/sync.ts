@@ -110,7 +110,7 @@ export function registerSyncCommand(program: Command): void {
       const cwd = process.cwd();
 
       if (!(await isInsideGitRepo(cwd))) {
-        throw new GitxError("Not inside a git repository.", { exitCode: 2 });
+        throw new GitxError("Not inside a git repository. cd into your project folder first.", { exitCode: 2 });
       }
 
       const strategy = opts.strategy === "rebase" ? "rebase" : "merge";

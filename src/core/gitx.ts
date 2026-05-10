@@ -174,7 +174,7 @@ export class Gitx {
   async getRepoContext(): Promise<RepoContext> {
     if (!(await isInsideGitRepo(this.cwd))) {
       throw new GitxError(
-        "Not inside a git repository. Navigate to a git repo and retry.",
+        "Not inside a git repository. cd into your project folder first.",
         { exitCode: 2 }
       );
     }
