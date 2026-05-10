@@ -395,4 +395,13 @@ Respond with ONLY valid JSON (no markdown fences):
     );
     return parseFixResponse(text, context.filePath, context.line);
   }
+
+  async ask(
+    question: string,
+    context: import("./types.js").AiAskContext
+  ): Promise<import("./types.js").AiAskResponse> {
+    const { buildAskSystem, buildAskPrompt, parseAskResponse } = await import("./reviewHelpers.js");
+    const text = await callClaudeCli(buildAskSystem(), buildAskPrompt(question, context));
+    return parseAskResponse(text);
+  }
 }

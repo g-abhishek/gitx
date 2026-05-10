@@ -88,6 +88,76 @@ export interface AiFixResponse {
   isDiscussion: boolean;
 }
 
+// ─── Ask command types ────────────────────────────────────────────────────────
+
+/**
+ * Diagnostic snapshot of which AI provider is active and how it was resolved.
+ * Keys are never included — only whether they are present.
+ */
+export interface AiSetupStatus {
+  /**
+   * Human-readable provider name, e.g. "claude (Anthropic API)", "openai", "claude-cli (local)", "none".
+   * "none" means no provider is configured and MockAi will be used.
+   */
+  provider: string;
+  /** Model in use, if applicable (e.g. "claude-3-5-haiku-20241022", "gpt-4o") */
+  model?: string;
+  /**
+   * Where the key / credential came from:
+   * "ANTHROPIC_API_KEY env var" | "OPENAI_API_KEY env var" | "config file" | "local CLI" | "none"
+   */
+  keySource: string;
+  /** true when at least one real AI provider is available */
+  isConfigured: boolean;
+}
+
+/**
+ * Status of a single configured git hosting provider.
+ * The actual token value is never included.
+ */
+export interface GitProviderStatus {
+  /** "github" | "gitlab" | "azure" */
+  name: string;
+  /** true when a non-empty token exists for this provider */
+  hasToken: boolean;
+}
+
+/**
+ * Live repo context gathered by `gitx ask` and injected into the AI prompt.
+ * All fields are optional so partial context still produces useful answers.
+ */
+export interface AiAskContext {
+  /** Whether the CWD is inside a git repository */
+  isInsideGitRepo: boolean;
+  /** Current checked-out branch name (only meaningful when isInsideGitRepo is true) */
+  currentBranch: string;
+  /** Last 10 commits as one-line summaries (hash + subject) */
+  recentCommits: string[];
+  /** Output of `git status --short` */
+  gitStatus: string;
+  /** Open pull requests from the remote provider */
+  openPRs?: Array<{ number: number; title: string; state: string; branch: string }>;
+  /** Stash entries (e.g. "stash@{0}: WIP on feat/x: abc1234 msg") */
+  stashes?: string[];
+  /** Detailed status of the active AI provider */
+  aiSetup: AiSetupStatus;
+  /** All configured git hosting providers (github / gitlab / azure) */
+  gitProviders: GitProviderStatus[];
+  /** The configured default base branch, if any */
+  defaultBranch?: string;
+}
+
+/** Response returned by `AiClient.ask()` for the `gitx ask` command. */
+export interface AiAskResponse {
+  /** Full answer in plain text or markdown */
+  answer: string;
+  /**
+   * Concrete gitx (or git) commands the user can run to act on the answer.
+   * Omit when not applicable.
+   */
+  suggestedCommands?: string[];
+}
+
 export interface AiClient {
   analyzeTask(input: string): Promise<AiAnalyzeTaskResponse>;
   generatePlan(context: unknown): Promise<AiGeneratePlanResponse>;
@@ -127,6 +197,15 @@ export interface AiClient {
     /** The relevant diff section for this file */
     fileDiff: string;
   }): Promise<AiFixResponse>;
+
+  /**
+   * Answer a free-form question about the repo using live git context + AI.
+   * Used by `gitx ask "<question>"`.
+   *
+   * @param question  The raw question string from the user.
+   * @param context   Live repo state gathered by the ask command.
+   */
+  ask(question: string, context: AiAskContext): Promise<AiAskResponse>;
 
   /**
    * Senior-developer quality PR review with full codebase context.

@@ -6,6 +6,7 @@ import { registerSyncCommand } from "./commands/sync.js";
 import { registerImplementCommand } from "./commands/implement.js";
 import { registerPrCommands } from "./commands/pr/index.js";
 import { registerConfigCommand } from "./commands/config.js";
+import { registerAskCommand } from "./commands/ask.js";
 import { logger } from "../logger/logger.js";
 import { GitxError } from "../utils/errors.js";
 
@@ -24,6 +25,7 @@ export async function runCli(argv: string[]): Promise<void> {
   registerConfigCommand(program);
   registerImplementCommand(program);
   registerPrCommands(program);
+  registerAskCommand(program);
 
   program.showHelpAfterError(true);
 

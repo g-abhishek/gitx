@@ -6,7 +6,7 @@
  * parseSeniorReview()        — safely parses the AI JSON response
  */
 
-import type { AiDetailedReviewResponse, AiFixResponse } from "./types.js";
+import type { AiAskContext, AiAskResponse, AiDetailedReviewResponse, AiFixResponse } from "./types.js";
 
 // ─── System prompt ────────────────────────────────────────────────────────────
 
@@ -474,5 +474,171 @@ export function parseFixResponse(text: string, filePath: string, line: number): 
       resolves: false,
       isDiscussion: true, // treat parse failure as discussion → no code change
     };
+  }
+}
+
+// ─── Ask command helpers ───────────────────────────────────────────────────────
+
+/** Command reference embedded into the ask system prompt. */
+const GITX_COMMAND_REFERENCE = `
+## gitx Command Reference
+
+| Command | Description |
+|---------|-------------|
+| gitx init / gitx config setup | Interactive setup wizard — configure git & AI providers |
+| gitx config show | Display current configuration (secrets redacted) |
+| gitx config set <key> [value] | Set a single config value (provider, token, model, etc.) |
+| gitx commit [-m msg] [--push] [--dry-run] | AI-generate commit message → commit (optionally push) |
+| gitx push [-b branch] [--dry-run] | Stage → AI-commit → push in one step |
+| gitx sync [--base branch] [--strategy merge|rebase] [--continue] [--abort] | Sync current branch with base; AI resolves conflicts |
+| gitx implement "<task>" [--mode plan|guided|semi-auto|auto] [--dry-run] | AI-plan and implement a task end-to-end |
+| gitx pr list [--state open|closed|all] | List pull requests |
+| gitx pr create [--title T] [--body B] [--draft] [--dry-run] | AI-generate PR title/body → open PR |
+| gitx pr review <number> [--no-comment] [--address] [--no-push] | Senior-dev AI review with inline comments |
+| gitx pr fix-comments <number> [--dry-run] [--no-push] | AI-fix review comments and push |
+| gitx pr merge <number> [--strategy squash|merge|rebase] [--delete-branch] | Merge a PR |
+| gitx pr close <number> [-f] | Close a PR |
+| gitx ask "<question>" [--pr] | Ask a question about the repo using AI + live git context |
+
+## Supported Providers
+- Git hosts: GitHub, GitLab, Azure DevOps
+- AI backends: Anthropic Claude (API), OpenAI, Local Claude CLI
+
+## Environment Variables
+- ANTHROPIC_API_KEY — Anthropic API key (auto-selects Claude as AI provider)
+- OPENAI_API_KEY    — OpenAI API key
+- GITX_AI_MODEL    — Override the AI model name
+- GITX_DEBUG=1     — Print full stack traces on errors
+`.trim();
+
+/**
+ * Builds the system prompt for `gitx ask`.
+ * Includes the full command reference and setup guidance so the AI can answer
+ * both "how do I…" questions and "is X configured?" diagnostics.
+ */
+export function buildAskSystem(): string {
+  return `You are gitx-assistant, a smart support assistant embedded in the gitx CLI.
+You help users with three types of questions:
+
+1. SETUP / DIAGNOSTIC — "is my AI provider set up?", "why isn't gitx working?", "what provider am I using?"
+   → Use the GITX SETUP STATUS section in the context. Give a clear yes/no diagnostic and actionable fix steps.
+
+2. REPO STATE — "what did I last commit?", "do I have unstaged changes?", "show me open PRs"
+   → Use the LIVE REPO CONTEXT section in the context.
+
+3. HOW-TO — "how do I sync with main?", "how do I undo a commit?", "how do I create a PR?"
+   → Use the GITX COMMAND REFERENCE below. Show the exact command.
+
+${GITX_COMMAND_REFERENCE}
+
+## Setup Fix Guide (use when AI or provider is not configured)
+- No AI provider → Run: gitx config setup  (or set ANTHROPIC_API_KEY / OPENAI_API_KEY env var)
+- AI provider configured in config but not working → Run: gitx config show  to inspect; re-run gitx config set <provider>
+- No git provider token → Run: gitx config set github  (or gitlab / azure)
+- Not inside a git repo → cd into your project folder first
+
+Rules:
+- Answer concisely and accurately. Get to the point immediately.
+- For setup/diagnostic questions: state clearly whether it IS or IS NOT configured, then explain WHY and how to fix it.
+- Never fabricate details — only use what is in the provided context.
+- Format your answer in plain text. Use a code block only for commands or file paths.
+- When suggesting commands, put them in suggestedCommands so they render highlighted.
+
+Respond with ONLY valid JSON (no markdown fences):
+{"answer":"<answer text>","suggestedCommands":["<cmd1>","<cmd2>"]}
+
+The suggestedCommands array may be empty [] if no command applies.`;
+}
+
+/**
+ * Builds the user-turn prompt for `gitx ask`, injecting live repo context
+ * and the full gitx setup status so the AI can answer diagnostic questions accurately.
+ */
+export function buildAskPrompt(question: string, ctx: AiAskContext): string {
+  const lines: string[] = [];
+
+  // ── Section 1: gitx setup status ──────────────────────────────────────────
+  lines.push(`## gitx Setup Status`);
+
+  // AI provider
+  const ai = ctx.aiSetup;
+  lines.push(`- AI provider: ${ai.provider}`);
+  lines.push(`- AI configured: ${ai.isConfigured ? "YES" : "NO — not configured"}`);
+  if (ai.model) lines.push(`- AI model: ${ai.model}`);
+  lines.push(`- AI key source: ${ai.keySource}`);
+
+  // Git providers
+  if (ctx.gitProviders.length > 0) {
+    lines.push(`- Git providers configured:`);
+    ctx.gitProviders.forEach((p) => {
+      const tokenStatus = p.hasToken ? "token ✓" : "token MISSING";
+      lines.push(`    ${p.name}: ${tokenStatus}`);
+    });
+  } else {
+    lines.push(`- Git providers configured: none`);
+  }
+
+  if (ctx.defaultBranch) {
+    lines.push(`- Default base branch: ${ctx.defaultBranch}`);
+  }
+
+  // ── Section 2: live repo context ──────────────────────────────────────────
+  lines.push(``);
+  lines.push(`## Live Repo Context`);
+  lines.push(`- Inside git repo: ${ctx.isInsideGitRepo ? "YES" : "NO"}`);
+
+  if (ctx.isInsideGitRepo) {
+    lines.push(`- Current branch: ${ctx.currentBranch}`);
+
+    if (ctx.recentCommits.length > 0) {
+      lines.push(`- Recent commits (newest first):`);
+      ctx.recentCommits.forEach((c) => lines.push(`    ${c}`));
+    } else {
+      lines.push(`- Recent commits: (none yet)`);
+    }
+
+    if (ctx.gitStatus.trim()) {
+      lines.push(`- Working tree status:\n${ctx.gitStatus}`);
+    } else {
+      lines.push(`- Working tree status: clean`);
+    }
+
+    if (ctx.stashes && ctx.stashes.length > 0) {
+      lines.push(`- Stashes:`);
+      ctx.stashes.forEach((s) => lines.push(`    ${s}`));
+    }
+
+    if (ctx.openPRs && ctx.openPRs.length > 0) {
+      lines.push(`- Open PRs:`);
+      ctx.openPRs.forEach((pr) =>
+        lines.push(`    #${pr.number} [${pr.state}] "${pr.title}" (branch: ${pr.branch})`)
+      );
+    }
+  }
+
+  // ── Section 3: question ───────────────────────────────────────────────────
+  lines.push(``);
+  lines.push(`## Question`);
+  lines.push(question);
+
+  return lines.join("\n");
+}
+
+/**
+ * Safely parses the AI JSON response for `gitx ask`.
+ * Falls back to using the raw text as the answer if JSON parsing fails.
+ */
+export function parseAskResponse(raw: string): AiAskResponse {
+  try {
+    const parsed = JSON.parse(raw) as Partial<AiAskResponse>;
+    return {
+      answer: parsed.answer?.trim() ?? raw.trim(),
+      suggestedCommands: Array.isArray(parsed.suggestedCommands)
+        ? parsed.suggestedCommands.filter((c): c is string => typeof c === "string")
+        : [],
+    };
+  } catch {
+    // If the AI returned plain text instead of JSON, use it directly
+    return { answer: raw.trim(), suggestedCommands: [] };
   }
 }

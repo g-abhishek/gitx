@@ -380,3 +380,43 @@ export async function isWorkingTreeDirty(cwd = process.cwd()): Promise<boolean> 
     return false;
   }
 }
+
+// ─── Context helpers for `gitx ask` ──────────────────────────────────────────
+
+/**
+ * Returns `git status --short` output for use in AI context.
+ * Returns an empty string when the working tree is clean or git fails.
+ */
+export async function getGitStatus(cwd = process.cwd()): Promise<string> {
+  try {
+    return await git(["status", "--short"], cwd);
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Returns the last `count` commits as one-line summaries (hash + subject).
+ * Defaults to the last 10 commits.
+ */
+export async function getRecentCommits(cwd = process.cwd(), count = 10): Promise<string[]> {
+  try {
+    const out = await git(["log", "--oneline", "--no-decorate", `-${count}`], cwd);
+    return out.split("\n").map((l) => l.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Returns the list of git stashes as `stash@{0}: ...` strings.
+ * Returns an empty array when there are no stashes or git fails.
+ */
+export async function getStashList(cwd = process.cwd()): Promise<string[]> {
+  try {
+    const out = await git(["stash", "list"], cwd);
+    return out.split("\n").map((l) => l.trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}

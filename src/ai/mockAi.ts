@@ -108,4 +108,16 @@ export class MockAi implements AiClient {
       isDiscussion: true,
     };
   }
+
+  async ask(
+    _question: string,
+    _context: import("./types.js").AiAskContext
+  ): Promise<import("./types.js").AiAskResponse> {
+    return {
+      answer:
+        "AI is not available (no provider configured). " +
+        "Run `gitx config setup` to configure an AI provider (Claude, OpenAI, or local Claude CLI).",
+      suggestedCommands: ["gitx config setup"],
+    };
+  }
 }
