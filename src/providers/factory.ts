@@ -16,8 +16,9 @@ export function createProvider(ctx: RepoContext): GitProvider {
     case "gitlab":
       return new GitLabProvider(ctx.token);
     case "azure":
-      // Azure needs org/project/repo parsed from the slug
-      return new AzureProvider(ctx.token, ctx.repoSlug);
+      // Azure needs org/project/repo parsed from the slug.
+      // tokenType distinguishes PAT (Basic auth) from GCM OAuth (Bearer auth).
+      return new AzureProvider(ctx.token, ctx.repoSlug, ctx.tokenType ?? "pat");
     default: {
       const p: never = ctx.provider;
       throw new GitxError(`Unsupported provider: ${String(p)}`, { exitCode: 2 });

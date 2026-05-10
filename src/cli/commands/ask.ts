@@ -127,16 +127,17 @@ function buildAiSetupStatus(config: GitxConfig): AiSetupStatus {
 
 /**
  * Return the list of configured git hosting providers with a simple
- * "has token / missing token" status. Never exposes actual token values.
+ * "has auth / missing auth" status. Never exposes actual token values.
+ * Recognises both PAT tokens and GCM (OAuth) as "configured".
  */
 function buildGitProviderStatus(config: GitxConfig): GitProviderStatus[] {
   const providers = config.providers ?? {};
   const result: GitProviderStatus[] = [];
   for (const [name, entry] of Object.entries(providers)) {
-    result.push({
-      name,
-      hasToken: !!entry?.token && entry.token.length > 0,
-    });
+    const hasToken =
+      entry?.authMethod === "gcm" ||
+      (!!entry?.token && entry.token.length > 0);
+    result.push({ name, hasToken });
   }
   return result;
 }

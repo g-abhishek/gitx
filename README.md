@@ -72,7 +72,7 @@ gitx config setup
 
 The wizard will ask you to configure:
 
-1. **Git provider** — GitHub, GitLab, or Azure DevOps (token, optional org)
+1. **Git provider** — GitHub, GitLab, or Azure DevOps
 2. **AI provider** — Anthropic Claude (API key), OpenAI (API key), or local Claude CLI (no key needed)
 
 Config is stored in `~/.config/gitx/config.json` (or the platform-appropriate XDG path).
@@ -83,6 +83,29 @@ Config is stored in `~/.config/gitx/config.json` (or the platform-appropriate XD
 export ANTHROPIC_API_KEY=sk-ant-…   # enables Claude automatically
 export OPENAI_API_KEY=sk-…          # enables OpenAI automatically
 ```
+
+### Azure DevOps authentication
+
+Azure DevOps supports two authentication methods:
+
+| Method | When to use |
+|--------|-------------|
+| **GCM (recommended)** | Your company uses Git Credential Manager + OAuth (blocks PAT tokens) |
+| **PAT** | Personal Access Token — classic approach, works everywhere |
+
+**GCM setup (one time):**
+
+```bash
+# 1. Configure git to use OAuth for Azure DevOps
+git config --global credential.azreposCredentialType oauth
+git config --global credential.https://dev.azure.com.useHttpPath true
+
+# 2. Run gitx setup — choose "Azure DevOps" → "GCM"
+gitx config set azure
+# gitx verifies your GCM setup and saves authMethod: "gcm" — no token stored
+```
+
+With GCM configured, gitx calls `git credential fill` at runtime to obtain a short-lived OAuth token. GCM handles browser login (once) and silent token refresh automatically.
 
 ---
 
@@ -300,6 +323,7 @@ gitx config set-default-branch main # set default base branch
 | Type | Supported |
 |------|-----------|
 | **Git hosts** | GitHub, GitLab, Azure DevOps |
+| **Azure auth** | PAT (Personal Access Token), GCM OAuth (Git Credential Manager) |
 | **AI backends** | Anthropic Claude (API), OpenAI GPT-4o, Local Claude CLI |
 
 ---

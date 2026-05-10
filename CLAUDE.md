@@ -168,6 +168,31 @@ All non-trivial AI prompt builders and response parsers live here so they are sh
 
 ---
 
+## Azure GCM Authentication (`src/utils/azureAuth.ts`)
+
+Handles Azure DevOps OAuth authentication via Git Credential Manager. No token is ever written to the gitx config file — GCM is the OS-level secure credential store.
+
+| Export | Purpose |
+|--------|---------|
+| `getTokenViaGcm(org)` | Calls `git credential fill` to obtain a Bearer token; in-memory cache for the process lifetime |
+| `invalidateGcmCache(org?)` | Clears the in-memory cache (called after a 401 to force re-fetch) |
+| `decodeJwtExpiry(token)` | Decodes the JWT `exp` claim from an Azure OAuth token (no signature check) |
+| `verifyGcmSetup(org)` | Checks git config (`useHttpPath`, `azreposCredentialType`) and does a live token fetch; returns `GcmVerifyResult` with issues + shell fixes |
+
+**Auth flow:**
+1. User runs `gitx config set azure` → wizard asks GCM or PAT → saves `authMethod: "gcm"` (no token)
+2. Any PR command calls `gitx.getRepoContext()` → detects `authMethod: "gcm"` → calls `getTokenViaGcm(org)` → returns `tokenType: "bearer"`
+3. `AzureProvider` constructor receives `tokenType: "bearer"` → sends `Authorization: Bearer <token>` instead of Basic auth
+4. On 401, user is directed to run `git pull` to trigger a fresh GCM browser login
+
+**Prerequisites (run once per machine):**
+```bash
+git config --global credential.azreposCredentialType oauth
+git config --global credential.https://dev.azure.com.useHttpPath true
+```
+
+---
+
 ## git Helpers (`src/utils/gitOps.ts`)
 
 All `git` subprocess calls are centralized here. Use these instead of spawning `git` yourself.
@@ -289,6 +314,7 @@ GitHub sometimes rejects inline review comments (422 "Line could not be resolved
 | New AI method | (none, internal) | AiClient interface table |
 | New git helper | (none, internal) | git Helpers table |
 | New provider (git or AI) | Supported Providers | Adding a New Provider section |
+| New auth method on existing provider | Configuration section (Azure section) | Azure GCM Authentication |
 | New shared prompt helper | (none, internal) | Shared Prompt Helpers table |
 | Environment variable | Environment Variables | Environment Variables |
 | Config key | Configuration section | (as needed) |

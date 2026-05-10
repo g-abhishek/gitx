@@ -17,6 +17,16 @@ export function isGitxConfig(value: unknown): value is GitxConfig {
   for (const [k, v] of Object.entries(providers)) {
     if (!ALLOWED_GIT_PROVIDERS.has(k)) return false;
     if (!isRecord(v)) return false;
+
+    const authMethod = v["authMethod"];
+    if (authMethod !== undefined && authMethod !== "pat" && authMethod !== "gcm") return false;
+
+    if (authMethod === "gcm") {
+      // GCM entries have no stored token — that is expected and valid
+      continue;
+    }
+
+    // PAT (default): token must be a non-empty string
     if (typeof v["token"] !== "string" || String(v["token"]).trim().length === 0) return false;
   }
 
