@@ -97,8 +97,12 @@ export interface AiClient {
   reviewPR(context: unknown): Promise<AiReviewPRResponse>;
   /** Generate a conventional commit message from a unified diff. */
   generateCommitMessage(diff: string): Promise<AiCommitMessageResponse>;
-  /** Generate a PR title and description from branch commits + diff. */
-  generatePrContent(commits: string[], diff: string): Promise<AiPrContentResponse>;
+  /**
+   * Generate a PR title and description from branch commits + diff.
+   * Pass `stat` (output of `git diff --stat`) alongside the diff so the AI
+   * sees every changed file even when the detailed patch is truncated.
+   */
+  generatePrContent(commits: string[], diff: string, stat?: string): Promise<AiPrContentResponse>;
   /**
    * Resolve git merge conflict markers in a file.
    * Returns the fully resolved file content + confidence level.

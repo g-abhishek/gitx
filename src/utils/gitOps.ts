@@ -318,6 +318,23 @@ export async function getBranchDiff(
 }
 
 /**
+ * Get the --stat summary of all changes between baseBranch and HEAD.
+ * Lists every file changed with insertion/deletion counts.
+ * Used alongside a truncated diff so the AI sees the full file list even
+ * when the detailed patch is cut off.
+ */
+export async function getBranchStat(
+  cwd = process.cwd(),
+  baseBranch = "main"
+): Promise<string> {
+  try {
+    return await git(["diff", "--stat", `${baseBranch}...HEAD`], cwd);
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Read file content as a string. Returns empty string if file doesn't exist.
  */
 export async function readRepoFile(

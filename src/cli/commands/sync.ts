@@ -33,7 +33,7 @@ import { isInsideGitRepo } from "../../utils/git.js";
 import { GitxError } from "../../utils/errors.js";
 import { Gitx } from "../../core/gitx.js";
 import { createProvider } from "../../providers/factory.js";
-import { runAddressWorkflow } from "../../workflows/prAddress.js";
+import { runAddressWorkflow, filterUnresolvedInlineComments } from "../../workflows/prAddress.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -421,13 +421,9 @@ async function checkAndOfferAddressComments(cwd: string, currentBranch: string):
 
     prNumber = openPr.number;
 
-    // Count inline review comments (excluding bot replies and general comments)
-    const botPrefixes = ["🤖", "✅ Addressed", "📍", "*(in reply to"];
+    // Use the shared helper: root inline comments with no "✅ Addressed" reply yet
     const allComments = await provider.getPRComments(ctx.repoSlug, prNumber);
-    unresolvedCount = allComments.filter(
-      (c) => c.path && c.line && c.line > 0 &&
-             !botPrefixes.some((p) => c.body.trimStart().startsWith(p))
-    ).length;
+    unresolvedCount = filterUnresolvedInlineComments(allComments).length;
 
     if (unresolvedCount === 0) return;
   } catch {

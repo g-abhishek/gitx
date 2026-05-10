@@ -108,15 +108,40 @@ function renderLineDiff(
 
 // ─── Comment filtering ────────────────────────────────────────────────────────
 
-/** Filter to comments that are on a specific file line (inline review comments). */
-function isInlineComment(c: PullRequestComment): boolean {
-  return !!c.path && typeof c.line === "number" && c.line > 0;
-}
+/**
+ * Given the full flat list of PR comments, return only the root inline comments
+ * that are genuinely unresolved — i.e.:
+ *
+ *   1. They are inline (have path + line > 0).
+ *   2. They are root comments, not replies (no inReplyToId).
+ *   3. None of their replies contain "✅ Addressed" — our bot's resolution marker.
+ *
+ * This is the single source of truth used by both the address workflow and the
+ * sync pre-check. Replacing the old body-prefix heuristic which was fragile and
+ * incorrectly filtered out valid comments.
+ */
+export function filterUnresolvedInlineComments(
+  all: PullRequestComment[]
+): PullRequestComment[] {
+  // Collect IDs of root comments that already have an "✅ Addressed" reply
+  const addressedIds = new Set<number>();
+  for (const c of all) {
+    if (c.inReplyToId && c.body.trimStart().startsWith("✅ Addressed")) {
+      addressedIds.add(c.inReplyToId);
+    }
+  }
 
-/** Skip bot-generated comments (gitx review replies, etc.) */
-function isHumanComment(c: PullRequestComment): boolean {
-  const botPrefixes = ["🤖", "✅ Addressed", "📍", "*(in reply to"];
-  return !botPrefixes.some((p) => c.body.trimStart().startsWith(p));
+  return all.filter(
+    (c) =>
+      // Must be inline (file + line present)
+      !!c.path &&
+      typeof c.line === "number" &&
+      c.line > 0 &&
+      // Must be a root comment, not a reply
+      !c.inReplyToId &&
+      // Must not already be addressed by our bot
+      !addressedIds.has(c.id)
+  );
 }
 
 // ─── Main workflow ────────────────────────────────────────────────────────────
@@ -146,7 +171,8 @@ export async function runAddressWorkflow(
   // ── 1. Fetch comments ──────────────────────────────────────────────────────
   const fetchSpinner = ora("Fetching PR review comments…").start();
   const allComments = await provider.getPRComments(ctx.repoSlug, prNumber);
-  const comments = allComments.filter(isInlineComment).filter(isHumanComment);
+  // Only address root inline comments that haven't been marked "✅ Addressed" yet
+  const comments = filterUnresolvedInlineComments(allComments);
   fetchSpinner.succeed(
     `Found ${comments.length} inline review comment(s) to address` +
     (allComments.length - comments.length > 0

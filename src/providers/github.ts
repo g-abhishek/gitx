@@ -33,6 +33,8 @@ interface GhComment {
   user: { login: string } | null;
   path?: string;
   line?: number;
+  /** Present on review comment replies — the ID of the comment being replied to */
+  in_reply_to_id?: number;
   created_at: string;
 }
 
@@ -308,6 +310,7 @@ function mapGhComment(c: GhComment): PullRequestComment {
     author: c.user?.login ?? "unknown",
     path: c.path,
     line: c.line,
+    inReplyToId: c.in_reply_to_id,
     createdAt: c.created_at,
   };
 }

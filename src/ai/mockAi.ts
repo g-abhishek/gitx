@@ -65,7 +65,7 @@ export class MockAi implements AiClient {
     };
   }
 
-  async generatePrContent(_commits: string[], _diff: string): Promise<import("./types.js").AiPrContentResponse> {
+  async generatePrContent(_commits: string[], _diff: string, _stat?: string): Promise<import("./types.js").AiPrContentResponse> {
     return {
       title: "Update branch",
       body: "",

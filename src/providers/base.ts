@@ -27,6 +27,11 @@ export interface PullRequestComment {
   path?: string;
   /** Line number if the comment is on a specific line */
   line?: number;
+  /**
+   * If this comment is a reply in a thread, the ID of the parent comment.
+   * Undefined for root / top-level comments.
+   */
+  inReplyToId?: number;
   createdAt: string;
 }
 
