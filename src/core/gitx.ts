@@ -15,6 +15,7 @@ import {
 import { GitxError } from "../utils/errors.js";
 import { logger } from "../logger/logger.js";
 import type { RepoContext } from "./context.js";
+import { getTokenViaGcm } from "../utils/azureAuth.js";
 
 export class Gitx {
   public readonly config: GitxConfig;
@@ -204,7 +205,39 @@ export class Gitx {
       );
     }
 
-    const token = this.config.providers[provider]?.token;
+    const providerConfig = this.config.providers[provider];
+    const authMethod = providerConfig?.authMethod ?? "pat";
+
+    // ── GCM path (Azure DevOps only) ─────────────────────────────────────────
+    if (authMethod === "gcm") {
+      if (provider !== "azure") {
+        throw new GitxError(
+          `GCM authentication is only supported for Azure DevOps, not "${provider}".`,
+          { exitCode: 2 }
+        );
+      }
+      // Org is the first segment of the Azure slug: "org/project/repo"
+      const org = repoSlug.split("/")[0];
+      if (!org) {
+        throw new GitxError(
+          `Cannot determine Azure DevOps org from repo slug: ${repoSlug}`,
+          { exitCode: 2 }
+        );
+      }
+      let token: string;
+      try {
+        token = await getTokenViaGcm(org);
+      } catch (err: unknown) {
+        throw new GitxError(
+          `GCM authentication failed: ${err instanceof Error ? err.message : String(err)}`,
+          { exitCode: 1 }
+        );
+      }
+      return { provider, repoSlug, token, tokenType: "bearer" };
+    }
+
+    // ── PAT path (default) ───────────────────────────────────────────────────
+    const token = providerConfig?.token;
     if (!token) {
       throw new GitxError(
         `This repo uses ${provider} but no ${provider} token is configured.\n` +
@@ -214,7 +247,7 @@ export class Gitx {
       );
     }
 
-    return { provider, repoSlug, token };
+    return { provider, repoSlug, token, tokenType: "pat" };
   }
 
   async getRepoSlug(): Promise<string> {

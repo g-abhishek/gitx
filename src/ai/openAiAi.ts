@@ -390,21 +390,32 @@ PR Description: ${ctx.prBody ?? ""}${diffSection}${commentsSection}`;
     };
   }
 
-  async generatePrContent(commits: string[], diff: string): Promise<import("./types.js").AiPrContentResponse> {
+  async generatePrContent(commits: string[], diff: string, stat?: string): Promise<import("./types.js").AiPrContentResponse> {
     const system = `You are an expert software engineer writing pull request descriptions.
 You are given a list of commits on the branch and the unified diff of all changes.
+
+The input may contain:
+  - "=== Changed files (complete list) ===" — the full --stat summary of every file touched
+  - "=== Detailed diff ===" — the actual patch (may be truncated for large changesets)
+
+When a file list is present, use it as the authoritative source of ALL changed files.
+Do not ignore files that appear in the list but are absent from the truncated diff.
 
 Produce a clear, informative PR title and description:
 
 Rules:
 - title: short, human-readable, present-tense. No conventional-commit prefix. Max 72 chars.
-- body: 2-4 sentences describing WHAT changed and WHY. Plain English, no bullet points.
+- body: 2-4 sentences describing WHAT changed and WHY. Cover ALL files from the list.
+  Plain English, no bullet points.
 
 Respond with ONLY valid JSON (no markdown fences):
 {"title":"<PR title>","body":"<PR description>"}`;
 
     const commitList = commits.slice(0, 20).join("\n");
-    const userPrompt = `Commits on this branch:\n${commitList}\n\nDiff:\n${diff.slice(0, 16000)}`;
+    const diffSection = stat
+      ? `=== Changed files (complete list) ===\n${stat}\n\n=== Detailed diff ===\n${diff.slice(0, 16000)}`
+      : `Diff:\n${diff.slice(0, 16000)}`;
+    const userPrompt = `Commits on this branch:\n${commitList}\n\n${diffSection}`;
     const text = await callOpenAi(system, userPrompt, this.apiKey, this.model);
     const parsed = parseJson<Partial<import("./types.js").AiPrContentResponse>>(text, {});
     return {
@@ -413,7 +424,6 @@ Respond with ONLY valid JSON (no markdown fences):
     };
   }
 
-<<<<<<< HEAD
   async resolveConflict(filePath: string, conflictContent: string): Promise<import("./types.js").AiConflictResolutionResponse> {
     const system = `You are an expert software engineer resolving git merge conflicts.
 
@@ -445,9 +455,6 @@ Respond with ONLY valid JSON (no markdown fences):
       explanation: parsed.explanation?.trim() ?? "Conflict resolved.",
     };
   }
-
-=======
->>>>>>> origin/main
   async generateCommitMessage(diff: string): Promise<import("./types.js").AiCommitMessageResponse> {
     const system = `You are an expert software engineer writing git commit messages.
 You receive either a plain unified diff OR a structured input with:
@@ -477,5 +484,40 @@ Respond with ONLY valid JSON (no markdown fences):
       subject: parsed.subject?.trim() ?? "chore: update files",
       body: parsed.body?.trim() || undefined,
     };
+  }
+
+  async reviewPRDetailed(
+    context: Parameters<import("./types.js").AiClient["reviewPRDetailed"]>[0]
+  ): Promise<import("./types.js").AiDetailedReviewResponse> {
+    const { buildSeniorReviewSystem, buildSeniorReviewPrompt, parseSeniorReview } = await import("./reviewHelpers.js");
+    const text = await callOpenAi(
+      buildSeniorReviewSystem(),
+      buildSeniorReviewPrompt(context),
+      this.apiKey,
+      this.model
+    );
+    return parseSeniorReview(text);
+  }
+
+  async generateFix(
+    context: Parameters<import("./types.js").AiClient["generateFix"]>[0]
+  ): Promise<import("./types.js").AiFixResponse> {
+    const { buildFixSystem, buildFixPrompt, parseFixResponse } = await import("./reviewHelpers.js");
+    const text = await callOpenAi(
+      buildFixSystem(),
+      buildFixPrompt(context),
+      this.apiKey,
+      this.model
+    );
+    return parseFixResponse(text, context.filePath, context.line);
+  }
+
+  async ask(
+    question: string,
+    context: import("./types.js").AiAskContext
+  ): Promise<import("./types.js").AiAskResponse> {
+    const { buildAskSystem, buildAskPrompt, parseAskResponse } = await import("./reviewHelpers.js");
+    const text = await callOpenAi(buildAskSystem(), buildAskPrompt(question, context), this.apiKey, this.model);
+    return parseAskResponse(text);
   }
 }

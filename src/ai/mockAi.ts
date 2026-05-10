@@ -65,7 +65,7 @@ export class MockAi implements AiClient {
     };
   }
 
-  async generatePrContent(_commits: string[], _diff: string): Promise<import("./types.js").AiPrContentResponse> {
+  async generatePrContent(_commits: string[], _diff: string, _stat?: string): Promise<import("./types.js").AiPrContentResponse> {
     return {
       title: "Update branch",
       body: "",
@@ -77,6 +77,47 @@ export class MockAi implements AiClient {
       resolved: conflictContent,
       confidence: "low",
       explanation: `AI conflict resolution is not available (no AI provider configured). Please resolve ${filePath} manually.`,
+    };
+  }
+
+  async reviewPRDetailed(
+    _context: Parameters<import("./types.js").AiClient["reviewPRDetailed"]>[0]
+  ): Promise<import("./types.js").AiDetailedReviewResponse> {
+    return {
+      summary: "AI PR review is not available (no AI provider configured). Set ANTHROPIC_API_KEY and retry.",
+      verdict: "comment",
+      issues: [],
+      inlineComments: [],
+      positives: [],
+      testingNotes: "Test the changes manually.",
+      checklist: [],
+    };
+  }
+
+  async generateFix(
+    context: Parameters<import("./types.js").AiClient["generateFix"]>[0]
+  ): Promise<import("./types.js").AiFixResponse> {
+    return {
+      file: context.filePath,
+      startLine: context.line,
+      endLine: context.line,
+      replacement: "",
+      explanation: "AI fix generation is not available (no AI provider configured).",
+      confidence: "low",
+      resolves: false,
+      isDiscussion: true,
+    };
+  }
+
+  async ask(
+    _question: string,
+    _context: import("./types.js").AiAskContext
+  ): Promise<import("./types.js").AiAskResponse> {
+    return {
+      answer:
+        "AI is not available (no provider configured). " +
+        "Run `gitx config setup` to configure an AI provider (Claude, OpenAI, or local Claude CLI).",
+      suggestedCommands: ["gitx config setup"],
     };
   }
 }

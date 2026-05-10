@@ -9,6 +9,7 @@ import { GitxError } from "../../utils/errors.js";
 import { validateNonEmpty } from "../../utils/validators.js";
 import { Gitx } from "../../core/gitx.js";
 import { ClaudeCliAi } from "../../ai/claudeCliAi.js";
+import { verifyGcmSetup } from "../../utils/azureAuth.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -37,7 +38,11 @@ async function loadOrEmpty(): Promise<GitxConfig> {
 function redactConfig(config: GitxConfig): unknown {
   const providers: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(config.providers)) {
-    providers[k] = v?.token ? { token: v.token.slice(0, 6) + "***" } : {};
+    if (v?.authMethod === "gcm") {
+      providers[k] = { authMethod: "gcm" };
+    } else {
+      providers[k] = v?.token ? { token: v.token.slice(0, 6) + "***", authMethod: v.authMethod ?? "pat" } : {};
+    }
   }
   const aiProviders: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(config.aiProviders ?? {})) {
@@ -82,10 +87,15 @@ export function registerConfigCommand(program: Command): void {
       const detected = gitx ? await gitx.detectProvider().catch(() => null) : null;
       if (detected) {
         logger.info(`🔎 Current repo: ${detected.repoSlug}  (${detected.provider})`);
-        const hasToken = Boolean(cfg.providers[detected.provider as ProviderKind]?.token);
-        hasToken
-          ? logger.success(`   ${detected.provider} token: configured ✓`)
-          : logger.warn(`   ${detected.provider} token: NOT configured — run: gitx config set ${detected.provider}`);
+        const provCfg = cfg.providers[detected.provider as ProviderKind];
+        const authMethod = provCfg?.authMethod ?? "pat";
+        if (authMethod === "gcm") {
+          logger.success(`   ${detected.provider}: configured via GCM (OAuth) ✓`);
+        } else if (provCfg?.token) {
+          logger.success(`   ${detected.provider} token: configured (PAT) ✓`);
+        } else {
+          logger.warn(`   ${detected.provider} token: NOT configured — run: gitx config set ${detected.provider}`);
+        }
       }
 
       // Show all AI providers
@@ -167,10 +177,15 @@ export function registerConfigCommand(program: Command): void {
 async function setGitProvider(provider: GitProviderKey, tokenArg?: string): Promise<void> {
   const existing = await loadOrEmpty();
 
-  const hints: Record<GitProviderKey, string> = {
+  // Azure DevOps: offer GCM (OAuth) or PAT
+  if (provider === "azure") {
+    await setAzureProvider(existing, tokenArg);
+    return;
+  }
+
+  const hints: Record<Exclude<GitProviderKey, "azure">, string> = {
     github: "github.com/settings/tokens → New token → scope: repo",
     gitlab: "gitlab.com/-/profile/personal_access_tokens → scope: api",
-    azure: "dev.azure.com → User settings → Personal access tokens → scope: Code (Read & write)",
   };
   logger.info(`   ℹ️  Get a token at: ${hints[provider]}\n`);
 
@@ -195,6 +210,139 @@ async function setGitProvider(provider: GitProviderKey, tokenArg?: string): Prom
   const path = await saveConfig(updated);
   spinner.succeed(`Saved to ${path}`);
   logger.success(`✅ ${provider} token updated.`);
+}
+
+// ─── Azure DevOps: GCM or PAT ─────────────────────────────────────────────────
+
+async function setAzureProvider(existing: GitxConfig, tokenArg?: string): Promise<void> {
+  const currentMethod = existing.providers.azure?.authMethod ?? "pat";
+
+  logger.info("\n🔐 Azure DevOps authentication\n");
+  logger.info("   Your company may restrict PAT tokens. GCM (OAuth) is the recommended method.\n");
+
+  const { authMethod } = await inquirer.prompt<{ authMethod: "gcm" | "pat" }>([
+    {
+      type: "list",
+      name: "authMethod",
+      message: "Authentication method:",
+      choices: [
+        {
+          name: `GCM — Git Credential Manager (OAuth, no token to manage)${currentMethod === "gcm" ? "  ✓ current" : " ← recommended"}`,
+          value: "gcm",
+        },
+        {
+          name: `PAT — Personal Access Token${currentMethod === "pat" ? "  ✓ current" : ""}`,
+          value: "pat",
+        },
+      ],
+      default: currentMethod,
+    },
+  ]);
+
+  if (authMethod === "gcm") {
+    await setupAzureGcm(existing);
+  } else {
+    await setupAzurePat(existing, tokenArg);
+  }
+}
+
+async function setupAzureGcm(existing: GitxConfig): Promise<void> {
+  logger.info("\n── GCM setup\n");
+  logger.info("   GCM uses `git credential fill` to obtain a short-lived OAuth token.");
+  logger.info("   No token is stored in the gitx config — GCM is the secure credential store.\n");
+
+  // Try to detect the org from the current repo remote
+  let detectedOrg: string | undefined;
+  try {
+    const gitx = await Gitx.fromCwd();
+    const det = await gitx.detectProvider();
+    if (det?.provider === "azure") {
+      detectedOrg = det.repoSlug.split("/")[0];
+    }
+  } catch { /* not in a git repo */ }
+
+  const { org } = await inquirer.prompt<{ org: string }>([
+    {
+      type: "input",
+      name: "org",
+      message: "Azure DevOps org name (e.g. MyCompany):",
+      default: detectedOrg,
+      validate: validateNonEmpty("Org name"),
+    },
+  ]);
+
+  const verifySpinner = ora("Verifying GCM setup…").start();
+  const result = await verifyGcmSetup(org);
+
+  if (result.ok) {
+    verifySpinner.succeed("GCM is correctly configured and a token was fetched successfully ✓");
+  } else {
+    verifySpinner.warn("GCM setup has issues:");
+    result.issues.forEach((issue) => logger.warn(`   ✗ ${issue}`));
+    if (result.fixes.length > 0) {
+      logger.info("\n   Run these commands to fix the issues:");
+      result.fixes.forEach((fix) => logger.info(`     $ ${fix}`));
+    }
+    logger.info("");
+
+    const { saveAnyway } = await inquirer.prompt<{ saveAnyway: boolean }>([
+      {
+        type: "confirm",
+        name: "saveAnyway",
+        message: "Save GCM config anyway? (you can fix the issues and it will work next time)",
+        default: false,
+      },
+    ]);
+    if (!saveAnyway) {
+      logger.info("   Cancelled — no changes saved.");
+      return;
+    }
+  }
+
+  const updated: GitxConfig = {
+    ...existing,
+    providers: {
+      ...existing.providers,
+      azure: { authMethod: "gcm" },
+    },
+  };
+
+  const spinner = ora("Saving…").start();
+  const path = await saveConfig(updated);
+  spinner.succeed(`Saved to ${path}`);
+  logger.success("✅ Azure DevOps configured to use GCM (OAuth).");
+  logger.info("   gitx will call `git credential fill` automatically when needed.");
+}
+
+async function setupAzurePat(existing: GitxConfig, tokenArg?: string): Promise<void> {
+  logger.info("\n── PAT setup\n");
+  logger.info("   ℹ️  Get a PAT at: dev.azure.com → User settings → Personal access tokens\n");
+  logger.info("          Scope required: Code (Read & write)\n");
+
+  const token = tokenArg?.trim().length
+    ? tokenArg.trim()
+    : (await inquirer.prompt<{ token: string }>([
+        {
+          type: "password",
+          name: "token",
+          message: "Azure DevOps PAT token:",
+          mask: "*",
+          validate: validateNonEmpty("Token"),
+        },
+      ])).token;
+
+  const updated: GitxConfig = {
+    ...existing,
+    providers: {
+      ...existing.providers,
+      azure: { token, authMethod: "pat" },
+    },
+  };
+
+  const spinner = ora("Saving…").start();
+  const path = await saveConfig(updated);
+  spinner.succeed(`Saved to ${path}`);
+  logger.success("✅ Azure DevOps PAT token saved.");
 }
 
 // ─── Set AI provider ──────────────────────────────────────────────────────────
@@ -387,6 +535,12 @@ export async function runSetup(): Promise<void> {
 
   if (providerOrSkip === "skip") {
     logger.info("   Skipping git provider setup — existing config unchanged.\n");
+  } else if (providerOrSkip === "azure") {
+    // Azure DevOps — delegate to the full GCM/PAT wizard which saves its own config
+    await setAzureProvider(existing);
+    // Reload providers so the merged save below reflects any changes
+    const reloaded = await loadOrEmpty();
+    updatedProviders = reloaded.providers;
   } else {
     const provider = providerOrSkip;
     const existingToken = existing.providers[provider]?.token;

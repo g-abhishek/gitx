@@ -7,6 +7,8 @@ import type {
   MergePrOptions,
   PullRequest,
   PullRequestComment,
+  ReviewComment,
+  SubmitReviewOptions,
 } from "./base.js";
 
 // ─── Raw GitHub API shapes ────────────────────────────────────────────────────
@@ -31,6 +33,8 @@ interface GhComment {
   user: { login: string } | null;
   path?: string;
   line?: number;
+  /** Present on review comment replies — the ID of the comment being replied to */
+  in_reply_to_id?: number;
   created_at: string;
 }
 
@@ -100,7 +104,29 @@ export class GitHubProvider implements GitProvider {
           params: { per_page: 100 },
         }),
       ]);
-      return [...reviewRes.data, ...issueRes.data].map(mapGhComment);
+
+      // Map review comments normally (they already carry path + line)
+      const reviewComments = reviewRes.data.map(mapGhComment);
+
+      // For issue comments, reconstruct path + line from gitx's fallback format:
+      //   📍 **`path/to/file.ts:42`**\n\nactual comment body
+      // These are posted when GitHub rejects inline review comments with 422.
+      const issueComments = issueRes.data.map((c) => {
+        const mapped = mapGhComment(c);
+        if (!mapped.path) {
+          const m = c.body.match(/^📍 \*\*`([^:`]+):(\d+)`\*\*\n\n([\s\S]+)$/);
+          if (m) {
+            mapped.path = m[1]!;
+            mapped.line = parseInt(m[2]!, 10);
+            // Expose the real comment body (without the 📍 header) so the AI
+            // gets clean text to work with, not the path:line decoration.
+            mapped.body = m[3]!.trim();
+          }
+        }
+        return mapped;
+      });
+
+      return [...reviewComments, ...issueComments];
     } catch (err) {
       throw wrapGhError(err, `get PR #${prNumber} comments`);
     }
@@ -168,6 +194,88 @@ export class GitHubProvider implements GitProvider {
     }
   }
 
+  async submitPRReview(repoSlug: string, prNumber: number, opts: SubmitReviewOptions): Promise<void> {
+    const eventMap: Record<SubmitReviewOptions["event"], string> = {
+      approve: "APPROVE",
+      request_changes: "REQUEST_CHANGES",
+      comment: "COMMENT",
+    };
+
+    const ghComments = (opts.comments ?? [])
+      .filter((c) => c.line > 0)
+      .map((c: ReviewComment) => ({
+        path: c.path,
+        line: c.line,
+        side: "RIGHT" as const,
+        body: c.body,
+      }));
+
+    // ── Attempt 1: formal review with all inline comments ─────────────────
+    // GitHub only accepts inline comments on lines that actually appear in
+    // the diff (changed lines + context lines within hunks). If any comment
+    // references a line outside the diff, GitHub rejects the entire request
+    // with 422 "Line could not be resolved".
+    if (ghComments.length > 0) {
+      try {
+        await this.http.post(`/repos/${repoSlug}/pulls/${prNumber}/reviews`, {
+          body: opts.body,
+          event: eventMap[opts.event],
+          comments: ghComments,
+        });
+        return; // success — all inline comments accepted
+      } catch (err) {
+        if (!isAxiosError(err) || err.response?.status !== 422) {
+          throw wrapGhError(err, `submit review on PR #${prNumber}`);
+        }
+        // 422 → some inline comments are on lines outside the diff.
+        // Fall through to attempt 2.
+      }
+    }
+
+    // ── Attempt 2: formal review without inline comments ──────────────────
+    // Posts the verdict (APPROVE / REQUEST_CHANGES / COMMENT) and summary
+    // body as a proper review, then posts each inline comment as a separate
+    // plain PR comment so the text is never lost.
+    try {
+      await this.http.post(`/repos/${repoSlug}/pulls/${prNumber}/reviews`, {
+        body: opts.body,
+        event: eventMap[opts.event],
+        // Omit `comments` entirely — avoid sending an empty array which
+        // can also trigger a 422 on some GitHub versions.
+      });
+    } catch {
+      // ── Attempt 3: plain issue comment (last resort) ───────────────────
+      // If even a comment-free review fails (permissions, draft PR, etc.),
+      // fall back to a regular PR comment so the review text still lands.
+      await this.http.post(`/repos/${repoSlug}/issues/${prNumber}/comments`, {
+        body: opts.body,
+      }).catch((e: unknown) => {
+        throw wrapGhError(e, `submit review on PR #${prNumber}`);
+      });
+    }
+
+    // Post each inline comment as a plain PR comment with file:line prefix
+    for (const c of ghComments) {
+      const body = `📍 **\`${c.path}:${c.line}\`**\n\n${c.body}`;
+      await this.http.post(`/repos/${repoSlug}/issues/${prNumber}/comments`, { body })
+        .catch(() => {}); // best-effort — don't abort if one comment fails
+    }
+  }
+
+  async replyToComment(repoSlug: string, prNumber: number, commentId: number, body: string): Promise<void> {
+    try {
+      // GitHub REST: reply directly to a pull request review comment thread
+      await this.http.post(
+        `/repos/${repoSlug}/pulls/${prNumber}/comments/${commentId}/replies`,
+        { body }
+      );
+    } catch {
+      // Fallback: post as a plain issue comment if the thread reply fails
+      await this.http.post(`/repos/${repoSlug}/issues/${prNumber}/comments`, { body })
+        .catch((e: unknown) => { throw wrapGhError(e, `reply to comment #${commentId}`); });
+    }
+  }
+
   async getDefaultBranch(repoSlug: string): Promise<string> {
     try {
       const { data } = await withRetry(() => this.http.get<GhRepo>(`/repos/${repoSlug}`));
@@ -202,6 +310,7 @@ function mapGhComment(c: GhComment): PullRequestComment {
     author: c.user?.login ?? "unknown",
     path: c.path,
     line: c.line,
+    inReplyToId: c.in_reply_to_id,
     createdAt: c.created_at,
   };
 }

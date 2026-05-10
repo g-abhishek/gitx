@@ -7,6 +7,7 @@ import type {
   MergePrOptions,
   PullRequest,
   PullRequestComment,
+  SubmitReviewOptions,
 } from "./base.js";
 
 // ─── Raw GitLab API shapes ────────────────────────────────────────────────────
@@ -162,6 +163,48 @@ export class GitLabProvider implements GitProvider {
       );
     } catch (err) {
       throw wrapGlError(err, `close MR !${prNumber}`);
+    }
+  }
+
+  async submitPRReview(repoSlug: string, prNumber: number, opts: SubmitReviewOptions): Promise<void> {
+    // Build the overall review note with verdict prefix
+    const verdictPrefix =
+      opts.event === "approve" ? "✅ **APPROVED**" :
+      opts.event === "request_changes" ? "🔴 **CHANGES REQUESTED**" : "💬 **REVIEW COMMENT**";
+
+    const overallBody = `${verdictPrefix}\n\n${opts.body}`;
+
+    try {
+      // Post the summary as a plain MR note
+      await this.http.post(
+        `/projects/${this.enc(repoSlug)}/merge_requests/${prNumber}/notes`,
+        { body: overallBody }
+      );
+
+      // Post inline comments as MR notes with file+line context embedded in the body
+      // (GitLab discussion positions require SHAs; use enriched body as fallback)
+      for (const c of opts.comments ?? []) {
+        const inlineBody = `**\`${c.path}:${c.line}\`**\n\n${c.body}`;
+        await this.http.post(
+          `/projects/${this.enc(repoSlug)}/merge_requests/${prNumber}/notes`,
+          { body: inlineBody }
+        ).catch(() => {});
+      }
+    } catch (err) {
+      throw wrapGlError(err, `submit review on MR !${prNumber}`);
+    }
+  }
+
+  async replyToComment(repoSlug: string, prNumber: number, commentId: number, body: string): Promise<void> {
+    try {
+      // GitLab: add a note to the MR (thread replies require discussion IDs which we don't store)
+      const replyBody = `*(in reply to comment #${commentId})*\n\n${body}`;
+      await this.http.post(
+        `/projects/${this.enc(repoSlug)}/merge_requests/${prNumber}/notes`,
+        { body: replyBody }
+      );
+    } catch (err) {
+      throw wrapGlError(err, `reply to comment #${commentId}`);
     }
   }
 

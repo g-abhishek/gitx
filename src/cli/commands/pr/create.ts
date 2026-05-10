@@ -35,6 +35,7 @@ import {
   detectBaseBranch,
   getBranchCommits,
   getBranchDiff,
+  getBranchStat,
 } from "../../../utils/gitOps.js";
 import { withLockRetry } from "../../../utils/lockFile.js";
 import { GitxError } from "../../../utils/errors.js";
@@ -183,12 +184,13 @@ export function registerPrCreateCommand(pr: Command): void {
         if (!prTitle || !prBody) {
           const prSpinner = ora("🤖 Generating PR title and description…").start();
           try {
-            const [commits, branchDiff] = await Promise.all([
+            const [commits, branchDiff, branchStat] = await Promise.all([
               getBranchCommits(cwd, base),
               getBranchDiff(cwd, base),
+              getBranchStat(cwd, base),
             ]);
 
-            const aiResult = await gitx.ai.generatePrContent(commits, branchDiff);
+            const aiResult = await gitx.ai.generatePrContent(commits, branchDiff, branchStat || undefined);
             if (!prTitle) prTitle = aiResult.title;
             if (!prBody) prBody = aiResult.body;
             prSpinner.succeed("PR content generated.");

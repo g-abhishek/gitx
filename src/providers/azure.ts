@@ -7,6 +7,7 @@ import type {
   MergePrOptions,
   PullRequest,
   PullRequestComment,
+  SubmitReviewOptions,
 } from "./base.js";
 
 /**
@@ -59,20 +60,29 @@ export class AzureProvider implements GitProvider {
   private readonly project: string;
   private readonly repoName: string;
 
-  constructor(token: string, repoSlug: string) {
+  /**
+   * @param token      PAT string or OAuth Bearer token (from GCM).
+   * @param repoSlug   "org/project/repo" slug.
+   * @param tokenType  "pat" (default) → Basic auth; "bearer" → Bearer auth.
+   */
+  constructor(token: string, repoSlug: string, tokenType: "pat" | "bearer" = "pat") {
     // Expect "org/project/repo"
     const parts = repoSlug.split("/");
     this.org = parts[0] ?? "unknown";
     this.project = parts[1] ?? "unknown";
     this.repoName = parts[2] ?? parts[1] ?? "unknown";
 
-    // Azure PAT auth: Basic base64(:<token>)
-    const encodedToken = Buffer.from(`:${token}`).toString("base64");
+    // PAT auth: Basic base64(:<pat>)
+    // GCM OAuth auth: Bearer <oauth_token>
+    const authHeader =
+      tokenType === "bearer"
+        ? `Bearer ${token}`
+        : `Basic ${Buffer.from(`:${token}`).toString("base64")}`;
 
     this.http = axios.create({
       baseURL: `https://dev.azure.com/${this.org}/${this.project}/_apis`,
       headers: {
-        Authorization: `Basic ${encodedToken}`,
+        Authorization: authHeader,
         "Content-Type": "application/json",
       },
       timeout: 20_000,
@@ -246,6 +256,61 @@ export class AzureProvider implements GitProvider {
     }
   }
 
+  async submitPRReview(_repoSlug: string, prNumber: number, opts: SubmitReviewOptions): Promise<void> {
+    const verdictPrefix =
+      opts.event === "approve" ? "✅ APPROVED" :
+      opts.event === "request_changes" ? "🔴 CHANGES REQUESTED" : "💬 REVIEW";
+
+    try {
+      // Post the summary as a PR thread
+      await this.http.post(
+        `/git/repositories/${this.repoName}/pullrequests/${prNumber}/threads`,
+        {
+          comments: [{ parentCommentId: 0, content: `${verdictPrefix}\n\n${opts.body}`, commentType: 1 }],
+          status: 1,
+        },
+        { params: this.apiParams() }
+      );
+
+      // Post inline comments as file-level threads
+      for (const c of opts.comments ?? []) {
+        await this.http.post(
+          `/git/repositories/${this.repoName}/pullrequests/${prNumber}/threads`,
+          {
+            comments: [{ parentCommentId: 0, content: c.body, commentType: 1 }],
+            threadContext: {
+              filePath: `/${c.path}`,
+              rightFileStart: { line: c.line, offset: 1 },
+              rightFileEnd: { line: c.line, offset: 120 },
+            },
+            status: 1,
+          },
+          { params: this.apiParams() }
+        ).catch(() => {});
+      }
+    } catch (err) {
+      throw wrapAzError(err, `submit review on PR #${prNumber}`);
+    }
+  }
+
+  async replyToComment(_repoSlug: string, prNumber: number, commentId: number, body: string): Promise<void> {
+    try {
+      // Azure DevOps: add a comment to an existing thread
+      // We don't have the threadId stored separately, so post a new general comment
+      const replyBody = `*(in reply to comment #${commentId})*\n\n${body}`;
+      await this.http.post(
+        `/git/repositories/${this.repoName}/pullRequests/${prNumber}/threads`,
+        {
+          comments: [{ parentCommentId: 0, content: replyBody, commentType: 1 }],
+          status: 4, // Fixed
+        },
+        { params: this.apiParams() }
+      );
+    } catch (err) {
+      throw wrapAzError(err, `reply to comment #${commentId}`);
+    }
+  }
+
   async getDefaultBranch(_repoSlug: string): Promise<string> {
     try {
       const { data } = await this.http.get<AzRepo>(
@@ -287,7 +352,9 @@ function wrapAzError(err: unknown, action: string): GitxError {
     const msg = (err.response?.data as Record<string, string> | undefined)?.message ?? err.message;
     if (status === 401 || status === 203) {
       return new GitxError(
-        `Azure DevOps authentication failed while trying to ${action}. Check your PAT token with \`gitx config set-provider azure\`.`,
+        `Azure DevOps authentication failed while trying to ${action}.\n` +
+        `  If using PAT: run \`gitx config set azure\` to update your token.\n` +
+        `  If using GCM: run \`git pull\` in your repo to trigger a fresh login.`,
         { exitCode: 1, cause: err }
       );
     }

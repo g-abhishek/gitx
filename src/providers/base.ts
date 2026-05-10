@@ -27,6 +27,11 @@ export interface PullRequestComment {
   path?: string;
   /** Line number if the comment is on a specific line */
   line?: number;
+  /**
+   * If this comment is a reply in a thread, the ID of the parent comment.
+   * Undefined for root / top-level comments.
+   */
+  inReplyToId?: number;
   createdAt: string;
 }
 
@@ -38,6 +43,26 @@ export interface CreatePrOptions {
   /** Target branch name */
   base: string;
   draft?: boolean;
+}
+
+/** A single inline review comment tied to a specific file + line. */
+export interface ReviewComment {
+  /** Relative file path */
+  path: string;
+  /** Line number in the NEW version of the file (right side) */
+  line: number;
+  /** Markdown comment body */
+  body: string;
+}
+
+/** Options for submitting a formal PR review (with optional inline comments). */
+export interface SubmitReviewOptions {
+  /** Overall review body (markdown) */
+  body: string;
+  /** Review verdict */
+  event: "approve" | "request_changes" | "comment";
+  /** Inline file+line comments to post */
+  comments?: ReviewComment[];
 }
 
 export interface MergePrOptions {
@@ -82,4 +107,17 @@ export interface GitProvider {
 
   /** Merge a pull request using the specified strategy. */
   mergePR(repoSlug: string, prNumber: number, opts: MergePrOptions): Promise<void>;
+
+  /**
+   * Submit a formal review (approve / request_changes / comment) with optional
+   * inline file-level comments. Falls back to a plain comment if the provider
+   * does not support formal reviews.
+   */
+  submitPRReview(repoSlug: string, prNumber: number, opts: SubmitReviewOptions): Promise<void>;
+
+  /**
+   * Reply to a specific review comment thread (to mark it as addressed).
+   * Falls back to a general PR comment if thread replies aren't supported.
+   */
+  replyToComment(repoSlug: string, prNumber: number, commentId: number, body: string): Promise<void>;
 }

@@ -35,7 +35,8 @@ export async function isInsideGitRepo(cwd = process.cwd()): Promise<boolean> {
  *   Azure DevOps:
  *     https://dev.azure.com/org/project/_git/repo
  *     https://org.visualstudio.com/project/_git/repo
- *     org@vs-ssh.visualstudio.com:v3/org/project/repo
+ *     git@ssh.dev.azure.com:v3/org/project/repo        (new SSH format)
+ *     org@vs-ssh.visualstudio.com:v3/org/project/repo  (legacy SSH format)
  *
  * Returns:
  *   GitHub/GitLab: "owner/repo"
@@ -68,9 +69,13 @@ export function inferRepoSlugFromRemote(url: string): string | undefined {
   if (azVs) return `${azVs[1]}/${azVs[2]}/${azVs[3]}`;
 
   // ── Azure DevOps SSH ──────────────────────────────────────────────────────
-  // {org}@vs-ssh.visualstudio.com:v3/{org}/{project}/{repo}
-  const azSsh = /^[^@]+@vs-ssh\.visualstudio\.com:v3\/([^/]+)\/([^/]+)\/([^/]+?)(?:\.git)?$/i.exec(cleaned);
-  if (azSsh) return `${azSsh[1]}/${azSsh[2]}/${azSsh[3]}`;
+  // New format: git@ssh.dev.azure.com:v3/{org}/{project}/{repo}
+  const azSshNew = /^[^@]+@ssh\.dev\.azure\.com:v3\/([^/]+)\/([^/]+)\/([^/]+?)(?:\.git)?$/i.exec(cleaned);
+  if (azSshNew) return `${azSshNew[1]}/${azSshNew[2]}/${azSshNew[3]}`;
+
+  // Legacy format: {org}@vs-ssh.visualstudio.com:v3/{org}/{project}/{repo}
+  const azSshLegacy = /^[^@]+@vs-ssh\.visualstudio\.com:v3\/([^/]+)\/([^/]+)\/([^/]+?)(?:\.git)?$/i.exec(cleaned);
+  if (azSshLegacy) return `${azSshLegacy[1]}/${azSshLegacy[2]}/${azSshLegacy[3]}`;
 
   return undefined;
 }
@@ -86,9 +91,8 @@ export function detectProviderFromRemote(url: string): ProviderKind | undefined 
   if (cleaned.includes("github.com")) return "github";
   if (cleaned.includes("gitlab.com")) return "gitlab";
   if (
-    cleaned.includes("dev.azure.com") ||
-    cleaned.includes("visualstudio.com") ||
-    cleaned.includes("vs-ssh.visualstudio.com")
+    cleaned.includes("dev.azure.com") ||   // HTTPS + new SSH (ssh.dev.azure.com)
+    cleaned.includes("visualstudio.com")    // legacy HTTPS + legacy SSH (vs-ssh.visualstudio.com)
   ) {
     return "azure";
   }
