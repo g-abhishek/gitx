@@ -201,6 +201,37 @@ gitx sync --abort                      # cancel an in-progress operation
 
 ---
 
+### gitx port
+
+Port commits from your current branch onto one or more other branches — the solution to "my lead wants this change on two other branches too."
+
+gitx uses `git cherry` (patch-ID comparison) to detect which commits are already ported, so re-running is always safe and incremental.
+
+```bash
+# From your feature branch:
+gitx port release/v2                    # port to one branch
+gitx port release/v2 hotfix/v1         # port to multiple at once
+gitx port release/v2 --base develop    # override base branch detection
+gitx port release/v2 --no-pr           # push only, create PRs manually
+gitx port release/v2 --draft           # create draft PRs
+
+# After adding more commits — only NEW commits will be ported:
+gitx port release/v2                   # incremental: skips already-ported commits
+
+# Conflict resolution:
+gitx port --continue                   # after manually fixing conflicts
+gitx port --abort                      # abandon a stuck port
+```
+
+**What it does per target branch:**
+1. Checks `origin/<target>` exists — errors clearly if not
+2. On first run: creates `port/<source>-to-<target>` and cherry-picks all commits
+3. On re-run: uses `git cherry` to find only NEW commits — skips already-ported ones
+4. Conflicts → AI attempts resolution; unresolvable ones pause for manual fix
+5. Pushes the port branch, checks for an existing open PR (updates it), or creates a new one with an AI-generated description
+
+---
+
 ### gitx implement
 
 Give the AI a task in plain English. It analyzes the repo, creates a plan, generates and applies diffs, commits, pushes, and opens a PR.
