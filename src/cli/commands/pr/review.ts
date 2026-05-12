@@ -1,9 +1,7 @@
 import type { Command } from "commander";
-import { select } from "@inquirer/prompts";
 import { logger } from "../../../logger/logger.js";
 import { Gitx } from "../../../core/gitx.js";
 import { runReviewWorkflow } from "../../../workflows/pr.js";
-import { runAddressWorkflow } from "../../../workflows/prAddress.js";
 
 export function registerPrReviewCommand(pr: Command): void {
   pr.command("review")
@@ -11,9 +9,7 @@ export function registerPrReviewCommand(pr: Command): void {
     .argument("<id>", "Pull request number")
     .option("--no-comment", "Show review locally only — do not post to PR")
     .option("--no-inline", "Post overall review but skip inline file comments")
-    .option("--address", "Skip review output and go straight to addressing existing comments")
-    .option("--no-push", "Apply fixes locally only — do not commit or push")
-    .action(async (id: string, options: { comment: boolean; inline: boolean; address?: boolean; push: boolean }) => {
+    .action(async (id: string, options: { comment: boolean; inline: boolean }) => {
       const prNumber = parseInt(id, 10);
       if (isNaN(prNumber) || prNumber <= 0) {
         logger.error(`Invalid PR number: ${id}`);
@@ -27,13 +23,6 @@ export function registerPrReviewCommand(pr: Command): void {
           "⚠️  No AI provider configured — review will not be meaningful.\n" +
           "   Run: gitx config set anthropic   (or openai / claude-cli)"
         );
-        return;
-      }
-
-      // ── --address flag: skip review, go straight to addressing ───────────
-      if (options.address) {
-        logger.info(`\n🔧 Addressing review comments on PR #${prNumber}\n`);
-        await runAddressFlow(gitx, prNumber, options.push !== false);
         return;
       }
 
@@ -161,77 +150,7 @@ export function registerPrReviewCommand(pr: Command): void {
         );
       }
 
-      // ── Offer to address the comments that were just posted ───────────────
-      // Only offer if: the review requested changes AND inline comments were posted
-      if (
-        review.verdict === "request_changes" &&
-        review.inlineComments.length > 0 &&
-        postComment
-      ) {
-        logger.info("");
-        await offerAddressFlow(gitx, prNumber, options.push !== false);
-      }
+      // To address the review comments, run: gitx pr fix-comments <PR_number>
     });
 }
 
-// ─── Address flow helpers ─────────────────────────────────────────────────────
-
-/**
- * Offer the address flow interactively after a review.
- * Shows a prompt and dispatches to runAddressFlow if the user chooses to act.
- */
-async function offerAddressFlow(gitx: Gitx, prNumber: number, allowPush: boolean): Promise<void> {
-  let choice: string;
-  try {
-    choice = await select({
-      message: `🔧 This review has ${allowPush ? "changes" : "comments"} — what would you like to do?`,
-      choices: [
-        {
-          name: "Address comments now  (AI generates fixes, you approve each one)",
-          value: "address",
-        },
-        {
-          name: "Address without pushing  (apply changes locally, verify before pushing)",
-          value: "address-local",
-        },
-        {
-          name: "Exit  (I'll address manually)",
-          value: "exit",
-        },
-      ],
-    });
-  } catch {
-    return; // Ctrl-C
-  }
-
-  if (choice === "exit") return;
-
-  await runAddressFlow(gitx, prNumber, allowPush && choice !== "address-local");
-}
-
-/**
- * Run the full address workflow and print a summary.
- */
-async function runAddressFlow(gitx: Gitx, prNumber: number, allowPush: boolean): Promise<void> {
-  logger.info(`\n🔧 Addressing review comments on PR #${prNumber}…\n`);
-
-  try {
-    const addressResult = await runAddressWorkflow(gitx, prNumber, {
-      mode: allowPush ? "interactive" : "no-push",
-    });
-
-    const applied = addressResult.addressed.filter((a) => a.applied).length;
-    const skipped = addressResult.addressed.filter((a) => a.skipped).length;
-
-    logger.info("\n── Summary ──────────────────────────────────────────────");
-    logger.info(`   ✅ ${applied} fix(es) applied`);
-    if (skipped > 0) logger.info(`   ⏭️  ${skipped} skipped`);
-    if (addressResult.pushed)       logger.success(`   🚀 Pushed to remote branch`);
-    if (addressResult.repliedCount) logger.success(`   💬 Replied to ${addressResult.repliedCount} thread(s) on GitHub`);
-    if (!addressResult.pushed && applied > 0) {
-      logger.info("   ℹ️  Run `git push` when you're ready to update the PR.");
-    }
-  } catch (err) {
-    logger.error(`Address workflow failed: ${(err as Error).message}`);
-  }
-}
