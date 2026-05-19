@@ -89,7 +89,7 @@ export function registerCommitCommand(program: Command): void {
       } else {
         const gitx = await Gitx.fromCwd(cwd);
 
-        if (!Gitx.isAiAvailable(gitx.config)) {
+        if (!await Gitx.isAiAvailable(gitx.config)) {
           logger.warn("⚠️  No AI provider configured. Run `gitx config` to set one up.");
           logger.warn("   Falling back to manual commit message entry.\n");
 

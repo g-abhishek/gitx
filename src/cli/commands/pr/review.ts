@@ -18,7 +18,7 @@ export function registerPrReviewCommand(pr: Command): void {
 
       const gitx = await Gitx.fromCwd();
 
-      if (!Gitx.isAiAvailable(gitx.config)) {
+      if (!await Gitx.isAiAvailable(gitx.config)) {
         logger.warn(
           "⚠️  No AI provider configured — review will not be meaningful.\n" +
           "   Run: gitx config set anthropic   (or openai / claude-cli)"
