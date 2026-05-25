@@ -54,11 +54,13 @@ export class Gitx {
   /**
    * Check whether any real AI (API key or local CLI) is available.
    */
-  static isAiAvailable(config: GitxConfig): boolean {
+  static async isAiAvailable(config: GitxConfig): Promise<boolean> {
     if (Gitx.resolveAiKey(config)) return true;
     if (Gitx.resolveOpenAiKey(config)) return true;
     if (config.aiProviders?.["claude-cli"] !== undefined) return true;
     if (config.defaultAiProvider) return true;
+    // Also check for auto-detected local claude CLI (same as buildAi step 4)
+    if (await ClaudeCliAi.isAvailable()) return true;
     return false;
   }
 
@@ -174,7 +176,7 @@ export class Gitx {
   async getRepoContext(): Promise<RepoContext> {
     if (!(await isInsideGitRepo(this.cwd))) {
       throw new GitxError(
-        "Not inside a git repository. Navigate to a git repo and retry.",
+        "Not inside a git repository. cd into your project folder first.",
         { exitCode: 2 }
       );
     }

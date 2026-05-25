@@ -110,7 +110,7 @@ export function registerSyncCommand(program: Command): void {
       const cwd = process.cwd();
 
       if (!(await isInsideGitRepo(cwd))) {
-        throw new GitxError("Not inside a git repository.", { exitCode: 2 });
+        throw new GitxError("Not inside a git repository. cd into your project folder first.", { exitCode: 2 });
       }
 
       const strategy = opts.strategy === "rebase" ? "rebase" : "merge";
@@ -256,7 +256,7 @@ export function registerSyncCommand(program: Command): void {
           // No AI available; fall through to manual instructions
         }
 
-        if (gitx && Gitx.isAiAvailable(gitx.config)) {
+        if (gitx && await Gitx.isAiAvailable(gitx.config)) {
           const resolved: string[] = [];
           const needsManual: string[] = [];
 
@@ -402,7 +402,7 @@ async function checkAndOfferAddressComments(cwd: string, currentBranch: string):
   let gitx: Gitx | null = null;
   try {
     gitx = await Gitx.fromCwd(cwd);
-    if (!Gitx.isAiAvailable(gitx.config)) return;
+    if (!await Gitx.isAiAvailable(gitx.config)) return;
   } catch {
     return; // no gitx config — skip silently
   }

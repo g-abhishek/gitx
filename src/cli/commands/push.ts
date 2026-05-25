@@ -6,6 +6,7 @@
  *
  * Usage:
  *   gitx push                  # full auto: stage + AI commit + push
+ *   gitx push --staged         # commit only already-staged changes, leave the rest untouched
  *   gitx push -m "fix: typo"   # use a custom message, skip AI
  *   gitx push --dry-run        # preview message without committing or pushing
  *   gitx push --branch feat    # push to a specific branch instead of current
@@ -22,6 +23,8 @@ import {
   isWorkingTreeDirty,
   getWorkingDiff,
   getWorkingDiffStat,
+  getStagedDiff,
+  getStagedDiffStat,
   commitChanges,
   pushBranch,
   getCurrentBranch,
@@ -35,10 +38,12 @@ export function registerPushCommand(program: Command): void {
     .command("push")
     .description("🚀 Stage, AI-commit, and push to origin in one step")
     .option("-m, --message <msg>", "Use a custom commit message (skips AI generation)")
+    .option("--staged", "Commit only already-staged changes — leave unstaged files untouched")
     .option("--dry-run", "Preview the commit message without committing or pushing")
     .option("-b, --branch <name>", "Push to this branch instead of the current branch")
     .action(async (opts: {
       message?: string;
+      staged?: boolean;
       dryRun?: boolean;
       branch?: string;
     }) => {
@@ -46,7 +51,7 @@ export function registerPushCommand(program: Command): void {
 
       // ── Guards ─────────────────────────────────────────────────────────────
       if (!(await isInsideGitRepo(cwd))) {
-        throw new GitxError("Not inside a git repository.", { exitCode: 2 });
+        throw new GitxError("Not inside a git repository. cd into your project folder first.", { exitCode: 2 });
       }
 
       const dirty = await isWorkingTreeDirty(cwd);
@@ -55,23 +60,34 @@ export function registerPushCommand(program: Command): void {
         return;
       }
 
-      // ── Stage all changes ──────────────────────────────────────────────────
-      const stageSpinner = ora("Staging all changes…").start();
-      await withLockRetry(() => stageAll(cwd), cwd);
-      stageSpinner.succeed("All changes staged.");
+      // ── Stage changes ──────────────────────────────────────────────────────
+      if (opts.staged) {
+        // --staged: only commit what's already in the index, leave the rest alone
+        const alreadyStaged = await hasStagedChanges(cwd);
+        if (!alreadyStaged) {
+          logger.warn("⚠️  No staged changes found. Stage files first with `git add <files>` then retry.");
+          return;
+        }
+        logger.info("📦 Using already-staged changes only (--staged).");
+      } else {
+        // Default: stage everything
+        const stageSpinner = ora("Staging all changes…").start();
+        await withLockRetry(() => stageAll(cwd), cwd);
+        stageSpinner.succeed("All changes staged.");
 
-      const staged = await hasStagedChanges(cwd);
-      if (!staged) {
-        logger.warn("No staged changes found after staging. Aborting.");
-        return;
+        const staged = await hasStagedChanges(cwd);
+        if (!staged) {
+          logger.warn("No staged changes found after staging. Aborting.");
+          return;
+        }
       }
 
       // ── Get diff for AI ────────────────────────────────────────────────────
       // stat = compact file list (always complete, never truncated)
       // diff = full patch (may be large — we truncate later in the AI call)
       const [stat, diff] = await Promise.all([
-        getWorkingDiffStat(cwd),
-        getWorkingDiff(cwd),
+        opts.staged ? getStagedDiffStat(cwd) : getWorkingDiffStat(cwd),
+        opts.staged ? getStagedDiff(cwd)     : getWorkingDiff(cwd),
       ]);
 
       // ── Generate or use custom commit message ──────────────────────────────
@@ -83,7 +99,7 @@ export function registerPushCommand(program: Command): void {
       } else {
         const gitx = await Gitx.fromCwd(cwd);
 
-        if (!Gitx.isAiAvailable(gitx.config)) {
+        if (!await Gitx.isAiAvailable(gitx.config)) {
           logger.warn("⚠️  No AI provider configured. Run `gitx config` to set one up.");
           logger.warn("   Falling back to manual commit message entry.\n");
 

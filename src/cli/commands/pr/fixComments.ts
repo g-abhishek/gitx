@@ -23,10 +23,10 @@ export function registerPrFixCommentsCommand(pr: Command): void {
       logger.info(`🩹 Fixing review comments on PR #${prNumber} (${ctx.repoSlug})…\n`);
 
       // ── AI availability warning ────────────────────────────────────────────
-      if (!process.env["ANTHROPIC_API_KEY"]) {
+      if (!await Gitx.isAiAvailable(gitx.config)) {
         logger.warn(
-          "⚠️  ANTHROPIC_API_KEY is not set — AI fix suggestions will be empty.\n" +
-          "   Export it first: export ANTHROPIC_API_KEY=sk-ant-..."
+          "⚠️  No AI provider configured — AI fix suggestions will be empty.\n" +
+          "   Run `gitx config` to set up an AI provider (Claude, OpenAI, or claude-cli)."
         );
         return;
       }

@@ -31,6 +31,7 @@ src/
 │       ├── config.ts        gitx config — setup wizard & config management
 │       ├── implement.ts     gitx implement — AI task implementation
 │       ├── init.ts          gitx init — alias for config setup
+│       ├── port.ts          gitx port — cherry-pick branch commits onto other branches
 │       ├── push.ts          gitx push — stage → commit → push
 │       ├── sync.ts          gitx sync — branch sync with AI conflict resolution
 │       └── pr/

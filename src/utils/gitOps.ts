@@ -195,6 +195,29 @@ export async function listTrackedFiles(cwd = process.cwd()): Promise<string[]> {
 }
 
 /**
+ * Get the unified diff of only staged changes (`git diff --cached`).
+ * Use this when the caller wants to commit only what's already in the index.
+ */
+export async function getStagedDiff(cwd = process.cwd()): Promise<string> {
+  try {
+    return await git(["diff", "--cached"], cwd);
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Get a compact stat summary of only staged changes (`git diff --cached --stat`).
+ */
+export async function getStagedDiffStat(cwd = process.cwd()): Promise<string> {
+  try {
+    return await git(["diff", "--cached", "--stat"], cwd);
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Get the unified diff of all uncommitted changes (staged + unstaged).
  */
 export async function getWorkingDiff(cwd = process.cwd()): Promise<string> {
