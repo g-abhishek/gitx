@@ -38,14 +38,14 @@ src/
 │           ├── index.ts     PR command dispatcher
 │           ├── close.ts     gitx pr close
 │           ├── create.ts    gitx pr create — AI PR creation
-│           ├── fixComments.ts  gitx pr fix-comments
+│           ├── resolve.ts   gitx pr resolve — AI-fix review comments in code
 │           ├── list.ts      gitx pr list
 │           ├── merge.ts     gitx pr merge
 │           └── review.ts    gitx pr review — senior-dev AI review
 │
 ├── workflows/
 │   ├── implement.ts         Full task implementation orchestration
-│   ├── pr.ts                PR review & fix-comments workflows
+│   ├── pr.ts                PR review & resolve workflows
 │   └── prAddress.ts         Address PR comments workflow (used by sync + review)
 │
 ├── ai/
@@ -71,7 +71,7 @@ src/
 │
 ├── config/
 │   ├── config.ts            loadConfig() / saveConfig()
-│   └── schema.ts            Zod schema for config validation
+│   └── schema.ts            Config validation (isGitxConfig guard — no Zod, supports tokenless GCM entries)
 │
 ├── types/
 │   ├── config.ts            GitxConfig type
@@ -81,6 +81,7 @@ src/
 ├── utils/
 │   ├── gitOps.ts            All git command wrappers (branch, diff, commit, stat, etc.)
 │   ├── git.ts               Low-level git utilities (remote URL, slug inference)
+│   ├── azureAuth.ts         Azure DevOps GCM OAuth helpers (getTokenViaGcm, verifyGcmSetup)
 │   ├── errors.ts            GitxError class with exit codes
 │   ├── lockFile.ts          withLockRetry() for concurrent git ops
 │   ├── retry.ts             Generic async retry utility
@@ -105,7 +106,7 @@ Every AI method lives here. All four providers must implement the full interface
 | `generatePrContent(commits, diff, stat?)` | `gitx pr create` |
 | `reviewPR(context)` | Basic review (legacy) |
 | `reviewPRDetailed(context)` | `gitx pr review` (senior-dev quality) |
-| `generateFix(context)` | `gitx pr fix-comments`, address workflow |
+| `generateFix(context)` | `gitx pr resolve`, address workflow |
 | `resolveConflict(filePath, content)` | `gitx sync` conflict resolution |
 | `analyzeTask(input)` | `gitx implement` |
 | `generatePlan(context)` | `gitx implement` |
@@ -146,6 +147,8 @@ The main SDK entry point. Responsible for:
 4. First `aiProviders` entry in config with a valid key
 5. Auto-detected local `claude` CLI → `ClaudeCliAi`
 6. `MockAi` (warns user to configure)
+
+**`isAiAvailable(config)`** is `async` — it runs `ClaudeCliAi.isAvailable()` (which shells out to `which claude`) to mirror step 5 of the cascade. All callers must `await` it. Never replace this with a plain env-var check or it will miss auto-detected CLI providers.
 
 ---
 
@@ -210,6 +213,8 @@ All `git` subprocess calls are centralized here. Use these instead of spawning `
 | `getGitStatus(cwd)` | `git status --short` |
 | `getRecentCommits(cwd, n)` | `git log --oneline -n` |
 | `getStashList(cwd)` | `git stash list` |
+| `getStagedDiff(cwd)` | `git diff --cached` (staged changes only) |
+| `getStagedDiffStat(cwd)` | `git diff --cached --stat` |
 | `stageAll(cwd)` | `git add -A` |
 | `hasStagedChanges(cwd)` | `git diff --cached --name-only` |
 | `commitChanges(msg, cwd)` | `git commit -m` |
@@ -225,12 +230,14 @@ The `filterUnresolvedInlineComments()` function is the **single source of truth*
 - Keeps only root comments (no `inReplyToId`) that have a `path` and `line`
 - Excludes comments that already have a `"✅ Addressed"` reply from the bot
 
-Used by both `gitx sync` (pre-sync PR check) and `gitx pr review` (post-review fix loop).
+Used by `gitx sync` (pre-sync PR check).
 
 **Address modes:**
 - `interactive` — user approves each fix, then pushes
 - `commit-no-push` — commits fixes, lets `gitx sync` push as part of the rebase
 - `no-push` — applies fixes locally only
+
+> **Note:** The dedicated command for addressing review comments is `gitx pr resolve`. The `prAddress.ts` workflow is the lower-level engine used internally by `gitx sync`'s pre-sync check. `gitx pr resolve` uses `runFixCommentsWorkflow` in `workflows/pr.ts` directly.
 
 ---
 
@@ -314,11 +321,13 @@ GitHub sometimes rejects inline review comments (422 "Line could not be resolved
 | New flag on existing command | That command's section | (if the flag changes architecture) Core Abstractions |
 | New AI method | (none, internal) | AiClient interface table |
 | New git helper | (none, internal) | git Helpers table |
+| New util file | (none, internal) | Repository Layout utils tree |
 | New provider (git or AI) | Supported Providers | Adding a New Provider section |
 | New auth method on existing provider | Configuration section (Azure section) | Azure GCM Authentication |
 | New shared prompt helper | (none, internal) | Shared Prompt Helpers table |
 | Environment variable | Environment Variables | Environment Variables |
 | Config key | Configuration section | (as needed) |
+| `isAiAvailable` behaviour change | (none) | Gitx class cascade note |
 
 ---
 

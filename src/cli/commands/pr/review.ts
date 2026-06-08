@@ -150,7 +150,7 @@ export function registerPrReviewCommand(pr: Command): void {
         );
       }
 
-      // To address the review comments, run: gitx pr fix-comments <PR_number>
+      // To resolve the review comments, run: gitx pr resolve <PR_number>
     });
 }
 

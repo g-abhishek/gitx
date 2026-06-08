@@ -19,7 +19,7 @@ gitx wraps your everyday git operations with AI to generate commit messages, wri
   - [gitx implement](#gitx-implement)
   - [gitx pr create](#gitx-pr-create)
   - [gitx pr review](#gitx-pr-review)
-  - [gitx pr fix-comments](#gitx-pr-fix-comments)
+  - [gitx pr resolve](#gitx-pr-resolve)
   - [gitx pr merge](#gitx-pr-merge)
   - [gitx pr list](#gitx-pr-list)
   - [gitx pr close](#gitx-pr-close)
@@ -35,10 +35,10 @@ gitx wraps your everyday git operations with AI to generate commit messages, wri
 |---------|--------------|
 | **AI commit messages** | Generates conventional-commit messages from your staged diff |
 | **AI PR descriptions** | Writes PR title + body from your branch commits and diff |
-| **AI code review** | Senior-dev quality review with inline comments posted to GitHub/GitLab/Azure |
+| **AI code review** | Senior-dev quality review with inline comments posted to GitHub/GitLab/Azure (`gitx pr review`) |
+| **AI comment resolve** | Reads unresolved review comments, fixes them in code, commits and pushes (`gitx pr resolve`) |
 | **AI conflict resolution** | Tries to auto-resolve merge/rebase conflicts; prompts when unsure |
 | **AI task implementation** | Takes a plain-English task, plans and applies diffs, commits, pushes, opens PR |
-| **AI comment addressing** | Reads unresolved review comments and generates targeted fixes |
 | **gitx ask** | Ask anything about your repo — get answers grounded in live git context |
 
 ---
@@ -178,8 +178,11 @@ Stage → AI-commit → push in one command.
 ```bash
 gitx push
 gitx push -b feature/my-branch   # push to a specific branch name
+gitx push --staged                # commit only already-staged files (skip git add -A)
 gitx push --dry-run               # preview without pushing
 ```
+
+Use `--staged` when you've manually staged a subset of changes with `git add` and want the AI commit message to reflect only those changes.
 
 ---
 
@@ -273,24 +276,33 @@ Run a senior-developer quality AI review on an open PR and post the results as f
 
 ```bash
 gitx pr review <number>
-gitx pr review 42 --no-comment    # show review locally, don't post to GitHub
-gitx pr review 42 --address       # skip review, jump straight to addressing comments
-gitx pr review 42 --no-push       # apply fixes locally without pushing
+gitx pr review 42 --no-comment    # show review locally, don't post to PR
+gitx pr review 42 --inline        # force inline comments (skip plain-comment fallback)
 ```
 
-The review covers: correctness, security, robustness, performance, breaking changes, best practices, test coverage, and documentation.
+The review covers: correctness, security, robustness, performance, breaking changes, best practices, test coverage, and documentation. After reviewing, run `gitx pr resolve <number>` to AI-fix the comments in your code.
 
 ---
 
-### gitx pr fix-comments
+### gitx pr resolve
 
-Read all unresolved review comments on a PR, AI-generate targeted fixes for each, and apply them.
+Read all unresolved review comments on a PR, AI-generate targeted code fixes for each, and apply them.
 
 ```bash
-gitx pr fix-comments <number>
-gitx pr fix-comments 42 --dry-run    # preview fixes without applying
-gitx pr fix-comments 42 --no-push   # apply locally, skip push
+gitx pr resolve <number>                  # apply fixes, commit, and push
+gitx pr resolve 42 --no-commit           # apply fixes to working tree only — review before committing
+gitx pr resolve 42 --no-push            # apply and commit locally, skip push
+gitx pr resolve 42 --dry-run            # preview what would be fixed, nothing applied
 ```
+
+**Typical workflow:**
+```bash
+gitx pr review 42       # AI reviews and posts inline comments to the PR
+# ... read the comments, understand the feedback ...
+gitx pr resolve 42      # AI fixes the comments in your code and pushes
+```
+
+Use `--no-commit` when you want to inspect the AI-applied diffs with `git diff` before deciding to commit.
 
 ---
 

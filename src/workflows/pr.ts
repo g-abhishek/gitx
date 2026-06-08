@@ -276,7 +276,8 @@ export interface FixCommentsResult {
 export async function runFixCommentsWorkflow(
   gitx: Gitx,
   prNumber: number,
-  dryRun = false
+  dryRun = false,
+  noCommit = false
 ): Promise<FixCommentsResult> {
   const { applyUnifiedDiff, stageAll, hasStagedChanges, commitChanges } = await import(
     "../utils/gitOps.js"
@@ -349,7 +350,7 @@ export async function runFixCommentsWorkflow(
     }
   }
 
-  if (!dryRun && appliedFixes.length > 0) {
+  if (!dryRun && !noCommit && appliedFixes.length > 0) {
     await stageAll(cwd);
     if (await hasStagedChanges(cwd)) {
       const msg = `fix: address PR #${prNumber} review comments\n\n${appliedFixes.map((f) => `- ${f.path}: ${f.rationale}`).join("\n")}`;
@@ -364,6 +365,10 @@ export async function runFixCommentsWorkflow(
         `## 🤖 Auto-fixes applied (gitx)\n\n${fixSummary}\n\nCommit: \`${sha.slice(0, 8)}\``
       );
     }
+  }
+
+  if (!dryRun && noCommit && appliedFixes.length > 0) {
+    logger.info("\n💡 Fixes applied to working tree. Review the changes and commit when ready.");
   }
 
   return { pr, comments, appliedFixes, skippedFixes };

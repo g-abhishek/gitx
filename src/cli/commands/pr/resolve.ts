@@ -1,0 +1,103 @@
+import type { Command } from "commander";
+import inquirer from "inquirer";
+import { logger } from "../../../logger/logger.js";
+import { Gitx } from "../../../core/gitx.js";
+import { runFixCommentsWorkflow } from "../../../workflows/pr.js";
+import { pushBranch, getCurrentBranch, isWorkingTreeDirty } from "../../../utils/gitOps.js";
+
+export function registerPrResolveCommand(pr: Command): void {
+  pr.command("resolve")
+    .description("🔧 AI-resolve review comments: applies code fixes, commits, and pushes")
+    .argument("<id>", "Pull request number")
+    .option("--dry-run", "Preview fixes without applying or committing", false)
+    .option("--no-commit", "Apply fixes to working tree only — skip commit and push", false)
+    .option("--no-push", "Apply & commit locally but skip push", false)
+    .action(async (id: string, options: { dryRun: boolean; commit: boolean; push: boolean }) => {
+      const prNumber = parseInt(id, 10);
+      if (isNaN(prNumber) || prNumber <= 0) {
+        logger.error(`Invalid PR number: ${id}`);
+        process.exit(1);
+      }
+
+      // Commander sets options.commit = false when --no-commit is passed
+      const noCommit = options.commit === false;
+
+      const gitx = await Gitx.fromCwd();
+      const ctx = await gitx.getRepoContext();
+      logger.info(`🔧 Resolving review comments on PR #${prNumber} (${ctx.repoSlug})…\n`);
+
+      // ── AI availability check ─────────────────────────────────────────────
+      if (!await Gitx.isAiAvailable(gitx.config)) {
+        logger.warn(
+          "⚠️  No AI provider configured — cannot generate fixes.\n" +
+          "   Run `gitx config` to set up an AI provider (Claude, OpenAI, or claude-cli)."
+        );
+        return;
+      }
+
+      // ── Confirmation prompt ───────────────────────────────────────────────
+      if (!options.dryRun) {
+        const modeDesc = noCommit
+          ? "apply fixes to your working tree only (no commit or push)"
+          : options.push === false
+            ? "apply fixes and commit locally (no push)"
+            : "apply fixes, commit, and push";
+
+        const { proceed } = await inquirer.prompt<{ proceed: boolean }>([
+          {
+            type: "confirm",
+            name: "proceed",
+            message: `This will ${modeDesc}. Continue?`,
+            default: false,
+          },
+        ]);
+        if (!proceed) {
+          logger.warn("Cancelled.");
+          return;
+        }
+      }
+
+      // ── Guard: warn about uncommitted changes ─────────────────────────────
+      if (!options.dryRun) {
+        const dirty = await isWorkingTreeDirty(gitx.cwd);
+        if (dirty) {
+          logger.warn("⚠️  You have uncommitted changes. They may conflict with applied fixes.");
+          const { cont } = await inquirer.prompt<{ cont: boolean }>([
+            { type: "confirm", name: "cont", message: "Continue anyway?", default: false },
+          ]);
+          if (!cont) { logger.warn("Cancelled."); return; }
+        }
+      }
+
+      const result = await runFixCommentsWorkflow(gitx, prNumber, options.dryRun, noCommit);
+
+      logger.info(`\n📋 PR: ${result.pr.title}`);
+
+      if (result.appliedFixes.length === 0 && result.skippedFixes.length === 0) {
+        logger.info("No actionable review comments found.");
+        return;
+      }
+
+      if (result.appliedFixes.length > 0) {
+        logger.success(`\n✅ Applied ${result.appliedFixes.length} fix(es):`);
+        result.appliedFixes.forEach((f) => logger.info(`  • ${f.path} — ${f.rationale}`));
+      }
+
+      if (result.skippedFixes.length > 0) {
+        logger.warn(`\n⚠️  Skipped ${result.skippedFixes.length} fix(es):`);
+        result.skippedFixes.forEach((f) => logger.warn(`  • ${f.path}: ${f.reason}`));
+      }
+
+      // ── Push if applicable ────────────────────────────────────────────────
+      if (!options.dryRun && !noCommit && options.push !== false && result.appliedFixes.length > 0) {
+        const branch = await getCurrentBranch(gitx.cwd);
+        logger.info(`\n🚀 Pushing ${branch}…`);
+        try {
+          await pushBranch(branch, gitx.cwd);
+          logger.success("Branch pushed.");
+        } catch (err) {
+          logger.warn(`Push failed: ${String((err as Error).message ?? err)}`);
+        }
+      }
+    });
+}

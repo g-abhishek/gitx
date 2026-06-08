@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { registerPrListCommand } from "./list.js";
 import { registerPrCreateCommand } from "./create.js";
 import { registerPrReviewCommand } from "./review.js";
-import { registerPrFixCommentsCommand } from "./fixComments.js";
+import { registerPrResolveCommand } from "./resolve.js";
 import { registerPrCloseCommand } from "./close.js";
 import { registerPrMergeCommand } from "./merge.js";
 
@@ -13,6 +13,6 @@ export function registerPrCommands(program: Command): void {
   registerPrCreateCommand(pr);
   registerPrMergeCommand(pr);
   registerPrReviewCommand(pr);
-  registerPrFixCommentsCommand(pr);
+  registerPrResolveCommand(pr);
   registerPrCloseCommand(pr);
 }
