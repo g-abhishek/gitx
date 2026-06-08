@@ -250,59 +250,81 @@ export async function getWorkingDiffStat(cwd = process.cwd()): Promise<string> {
  * Auto-detect the most likely base branch for the current feature branch.
  *
  * Strategy:
- *   1. Check if the current branch has a configured upstream tracking branch.
- *   2. Otherwise, try common default branch names (main, master, develop, dev).
- *   3. For each candidate, count commits on HEAD that are NOT in that branch.
- *      The candidate with the fewest such commits is the likely origin.
+ *   1. Upstream tracking branch set via `git push -u` — strongest signal.
+ *      Ignored if it points to the branch's own remote ref (origin/current).
+ *   2. Scan ALL remote tracking branches and count how many commits HEAD has
+ *      that each candidate doesn't (`git rev-list --count <ref>..HEAD`).
+ *      The branch with the FEWEST such commits is the closest ancestor —
+ *      i.e. the branch this one was forked from.
+ *
+ *      Example: main → feature1 (3 commits) → feature2 (2 commits)
+ *        - origin/main..HEAD    = 5  (feature1's 3 + feature2's 2)
+ *        - origin/feature1..HEAD = 2  (just feature2's commits)
+ *        → feature1 wins  ✓
  *
  * Falls back to "main" if nothing can be determined.
  */
 export async function detectBaseBranch(cwd = process.cwd()): Promise<string> {
-  // Get current branch name upfront — used for all checks below
   const current = await git(["rev-parse", "--abbrev-ref", "HEAD"], cwd).catch(() => "");
 
-  // 1. Try upstream tracking branch — only useful if it points to a DIFFERENT
-  //    branch (e.g. origin/main), not the branch's own remote tracking ref.
-  //    e.g. "origin/gitx/test" → "gitx/test" == current → skip
-  //         "origin/main"      → "main"       != current → use it
+  // 1. Explicit upstream tracking branch — only trust it if it differs from
+  //    the current branch (guards against "origin/feature2" → "feature2").
   try {
     const upstream = await git(["rev-parse", "--abbrev-ref", "@{upstream}"], cwd);
     const branch = upstream.replace(/^[^/]+\//, "").trim();
     if (branch && branch !== current) return branch;
   } catch {
-    // No upstream configured — fall through
+    // No upstream set — fall through
   }
 
-  // 2. Check remote HEAD (origin's default branch)
+  // 2. Scan all remote tracking branches (origin/*), compute how many commits
+  //    HEAD has that each remote ref doesn't. Closest ancestor wins.
   try {
-    const remoteHead = await git(["rev-parse", "--abbrev-ref", "origin/HEAD"], cwd);
-    const branch = remoteHead.replace(/^origin\//, "").trim();
-    if (branch && branch !== current) return branch;
-  } catch {
-    // Not available — fall through
-  }
+    const remoteOut = await git(
+      ["branch", "-r", "--format=%(refname:short)"],
+      cwd
+    );
 
-  // 3. Count commits ahead of each common default branch name
-  const candidates = ["main", "master", "develop", "dev", "staging"];
-  const counts: Array<{ branch: string; ahead: number }> = [];
-  for (const candidate of candidates) {
-    if (candidate === current) continue;
-    try {
-      // Count commits on HEAD not in candidate
-      const out = await git(["rev-list", "--count", `${candidate}..HEAD`], cwd);
-      counts.push({ branch: candidate, ahead: parseInt(out.trim(), 10) || 0 });
-    } catch {
-      // Branch doesn't exist locally — skip
-    }
-  }
+    const remoteRefs = remoteOut
+      .split("\n")
+      .map((b) => b.trim())
+      .filter((b) => b && !b.endsWith("/HEAD")); // skip "origin/HEAD" pointer
 
-  if (counts.length > 0) {
-    // Pick the branch with the fewest commits ahead (closest ancestor)
-    counts.sort((a, b) => a.ahead - b.ahead);
+    if (remoteRefs.length === 0) return "main";
+
+    // Count commits ahead of every remote ref in parallel for speed
+    const results = await Promise.all(
+      remoteRefs.map(async (ref) => {
+        const name = ref.replace(/^[^/]+\//, ""); // "origin/feature1" → "feature1"
+        if (name === current) return null; // skip own remote tracking ref
+        try {
+          const out = await git(["rev-list", "--count", `${ref}..HEAD`], cwd);
+          return { branch: name, ahead: parseInt(out.trim(), 10) || 0 };
+        } catch {
+          return null;
+        }
+      })
+    );
+
+    const counts = results.filter((r): r is { branch: string; ahead: number } => r !== null);
+    if (counts.length === 0) return "main";
+
+    // Sort by fewest commits ahead — that's the closest ancestor.
+    // Tiebreak: prefer default branch names so "main" beats an equally-close
+    // unrelated branch that happens to have 0 commits.
+    const defaults = new Set(["main", "master", "develop", "dev", "staging"]);
+    counts.sort((a, b) => {
+      if (a.ahead !== b.ahead) return a.ahead - b.ahead;
+      // Same distance — prefer default branches
+      const aDefault = defaults.has(a.branch) ? 0 : 1;
+      const bDefault = defaults.has(b.branch) ? 0 : 1;
+      return aDefault - bDefault;
+    });
+
     return counts[0]!.branch;
+  } catch {
+    return "main";
   }
-
-  return "main";
 }
 
 /**

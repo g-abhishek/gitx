@@ -204,7 +204,7 @@ All `git` subprocess calls are centralized here. Use these instead of spawning `
 | Export | Command |
 |--------|---------|
 | `getCurrentBranch(cwd)` | `git rev-parse --abbrev-ref HEAD` |
-| `detectBaseBranch(cwd)` | inspects remote HEAD, upstream tracking, common names |
+| `detectBaseBranch(cwd)` | finds true parent branch by scanning all remote refs and picking fewest-commits-ahead |
 | `getWorkingDiff(cwd)` | `git diff HEAD` (staged + unstaged) |
 | `getWorkingDiffStat(cwd)` | `git diff --stat HEAD` |
 | `getBranchDiff(cwd, base)` | `git diff base...HEAD` |
