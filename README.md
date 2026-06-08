@@ -200,7 +200,7 @@ gitx sync --abort                      # cancel an in-progress operation
 
 **AI conflict resolution:** When a merge/rebase conflict is detected, gitx asks the AI to resolve it. High-confidence resolutions are applied automatically; low-confidence ones are shown to you for confirmation.
 
-**Pre-sync PR comment check:** If your branch has an open PR with unresolved review comments, gitx will ask whether to address them before syncing. Choosing "Resolve comments first" runs the address workflow, commits the fixes, then the sync rebase/merge picks everything up in a single push.
+To address review comments before syncing, run `gitx pr resolve <number>` first.
 
 ---
 

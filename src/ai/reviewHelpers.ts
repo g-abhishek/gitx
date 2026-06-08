@@ -506,7 +506,7 @@ const GITX_COMMAND_REFERENCE = `
 | gitx config set <key> [value] | Set a single config value (provider, token, model, etc.) |
 | gitx commit [-m msg] [--push] [--dry-run] | AI-generate commit message → commit (optionally push) |
 | gitx push [-b branch] [--staged] [--dry-run] | Stage → AI-commit → push in one step; --staged uses already-staged files only |
-| gitx sync [--base branch] [--strategy merge|rebase] [--continue] [--abort] | Sync current branch with base; AI resolves conflicts |
+| gitx sync [--base branch] [--strategy merge|rebase] [--continue] [--abort] | Fetch + merge/rebase base into current branch; AI auto-resolves conflicts. Run "gitx pr resolve" first if you have open review comments. |
 | gitx port <target…> [--base branch] [--no-pr] [--draft] [--continue] [--abort] | Cherry-pick commits onto other branches with incremental detection |
 | gitx implement "<task>" [--mode plan|guided|semi-auto|auto] [--dry-run] | AI-plan and implement a task end-to-end |
 | gitx pr list [--state open|closed|all] | List pull requests |

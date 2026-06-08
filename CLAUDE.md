@@ -230,14 +230,12 @@ The `filterUnresolvedInlineComments()` function is the **single source of truth*
 - Keeps only root comments (no `inReplyToId`) that have a `path` and `line`
 - Excludes comments that already have a `"✅ Addressed"` reply from the bot
 
-Used by `gitx sync` (pre-sync PR check).
-
 **Address modes:**
 - `interactive` — user approves each fix, then pushes
-- `commit-no-push` — commits fixes, lets `gitx sync` push as part of the rebase
+- `commit-no-push` — commits fixes without pushing
 - `no-push` — applies fixes locally only
 
-> **Note:** The dedicated command for addressing review comments is `gitx pr resolve`. The `prAddress.ts` workflow is the lower-level engine used internally by `gitx sync`'s pre-sync check. `gitx pr resolve` uses `runFixCommentsWorkflow` in `workflows/pr.ts` directly.
+> **Note:** The dedicated command for addressing review comments is `gitx pr resolve`, which uses `runFixCommentsWorkflow` in `workflows/pr.ts` directly. `prAddress.ts` is retained as a shared utility for any future internal use.
 
 ---
 
