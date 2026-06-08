@@ -227,60 +227,72 @@ export function buildSeniorReviewPrompt(
   // ── Parse which lines actually changed per file ───────────────────────────
   const hunkRanges = parseHunkRanges(context.diff);
 
-  // ── Changed file sections — only the relevant areas + function context ──────
-  // Hard per-file cap: if a single function is genuinely 500+ lines we still
-  // need to stop somewhere, but we ALWAYS stop on a complete line boundary so
-  // the AI never sees half a statement.
-  // The per-file cap is generous (300 lines) to handle large but realistic functions.
-  const PER_FILE_LINE_CAP = 300;
-  const DIFF_BUDGET       = 5_000;
-  const CTX_FILE_MAX      = 1_500;
+  // ── Budget constants ──────────────────────────────────────────────────────
+  // Claude has a 200k-token context window. We stay well within that while
+  // sending enough code for a thorough review.
+  //
+  // Strategy:
+  //   • Files ≤ FULL_FILE_THRESHOLD lines  → send the ENTIRE file (best context)
+  //   • Larger files                        → smart section extraction around hunks
+  //     with generous context above (function boundary) and below (CONTEXT_LINES_BELOW)
+  //   • Hard per-file cap for huge files    → PER_FILE_LINE_CAP lines of excerpts
+  const FULL_FILE_THRESHOLD   = 400;   // files ≤ this many lines are sent whole
+  const CONTEXT_LINES_BELOW   = 60;    // lines below each hunk in extraction mode
+  const PER_FILE_LINE_CAP     = 800;   // hard cap on excerpt lines for very large files
+  const DIFF_BUDGET           = 30_000; // unified diff character budget (was 5k — way too small)
+  const CTX_FILE_MAX          = 4_000;  // max chars per supporting context file (was 1.5k)
 
   const changedEntries = Object.entries(context.changedFiles);
   if (changedEntries.length > 0) {
-    parts.push(`\n### Changed sections (line numbers are exact positions in the new file)`);
+    parts.push(`\n### Changed files (line numbers are exact positions in the new file)`);
 
     for (const [path, content] of changedEntries) {
+      const fileLines = content.split("\n");
       const hunks = hunkRanges.get(path) ?? [];
 
       let excerpt: string;
-      if (hunks.length === 0) {
-        // No hunk data (binary / rename-only) — show first 60 lines as fallback
-        const lines = content.split("\n");
-        excerpt = lines
-          .slice(0, 60)
+      let deliveryNote: string;
+
+      if (fileLines.length <= FULL_FILE_THRESHOLD) {
+        // Small file — send the whole thing. The AI gets complete context with no gaps.
+        excerpt = fileLines
           .map((l, i) => `${String(i + 1).padStart(5, " ")} | ${l}`)
           .join("\n");
-        if (lines.length > 60) excerpt += "\n      … (file continues — only first 60 lines shown as fallback)";
+        deliveryNote = `full file, ${fileLines.length} lines`;
+      } else if (hunks.length === 0) {
+        // No hunk data (binary / rename-only) — show first 100 lines as fallback
+        excerpt = fileLines
+          .slice(0, 100)
+          .map((l, i) => `${String(i + 1).padStart(5, " ")} | ${l}`)
+          .join("\n");
+        if (fileLines.length > 100)
+          excerpt += `\n      … (file continues — only first 100 lines shown; no hunk data available)`;
+        deliveryNote = `first 100 of ${fileLines.length} lines (no hunk data)`;
       } else {
-        excerpt = extractChangedSections(content, hunks);
+        // Large file — extract sections around changed hunks with generous context
+        excerpt = extractChangedSections(content, hunks, CONTEXT_LINES_BELOW);
+
+        // Cap at PER_FILE_LINE_CAP complete lines — never mid-line
+        const excerptLines = excerpt.split("\n");
+        if (excerptLines.length > PER_FILE_LINE_CAP) {
+          excerpt =
+            excerptLines.slice(0, PER_FILE_LINE_CAP).join("\n") +
+            `\n      … (${excerptLines.length - PER_FILE_LINE_CAP} more excerpt lines omitted` +
+            ` — file has ${fileLines.length} total lines; see the diff below for full change)`;
+        }
+        deliveryNote = `${hunks.length} hunk${hunks.length > 1 ? "s" : ""}, ${fileLines.length} total lines`;
       }
 
-      // Cap at PER_FILE_LINE_CAP complete lines — never mid-line
-      const excerptLines = excerpt.split("\n");
-      let finalExcerpt: string;
-      if (excerptLines.length > PER_FILE_LINE_CAP) {
-        finalExcerpt =
-          excerptLines.slice(0, PER_FILE_LINE_CAP).join("\n") +
-          `\n      … (${excerptLines.length - PER_FILE_LINE_CAP} more lines not shown` +
-          ` — this function is unusually large; review the diff for remaining changes)`;
-      } else {
-        finalExcerpt = excerpt;
-      }
-
-      const hunkDesc = hunks.length > 0
-        ? ` (${hunks.length} change hunk${hunks.length > 1 ? "s" : ""})`
-        : "";
-      parts.push(`\n#### ${path}${hunkDesc}\n\`\`\`\n${finalExcerpt}\n\`\`\``);
+      parts.push(`\n#### ${path} (${deliveryNote})\n\`\`\`\n${excerpt}\n\`\`\``);
     }
   }
 
-  // ── Diff (compact view of what changed, used for overall change understanding)
+  // ── Unified diff (the raw patch — gives the AI the exact before/after for every line)
   if (context.diff.trim()) {
     const diffSlice = context.diff.slice(0, DIFF_BUDGET);
     const diffTrunc = diffSlice.length < context.diff.length;
     parts.push(
-      `\n### Unified diff${diffTrunc ? " (truncated)" : ""}\n\`\`\`diff\n${diffSlice}\n\`\`\``
+      `\n### Unified diff${diffTrunc ? ` (truncated to ${DIFF_BUDGET} chars — see file sections above for full content)` : ""}\n\`\`\`diff\n${diffSlice}\n\`\`\``
     );
   }
 
@@ -289,7 +301,11 @@ export function buildSeniorReviewPrompt(
   if (ctxEntries.length > 0) {
     parts.push(`\n### Supporting context files (unchanged — imported by changed files)`);
     for (const [path, content] of ctxEntries) {
-      parts.push(`\n#### ${path}\n\`\`\`\n${content.slice(0, CTX_FILE_MAX)}\n\`\`\``);
+      const ctxLines = content.split("\n");
+      const ctxExcerpt = content.length <= CTX_FILE_MAX
+        ? content
+        : content.slice(0, CTX_FILE_MAX) + `\n… (truncated — ${ctxLines.length} total lines)`;
+      parts.push(`\n#### ${path}\n\`\`\`\n${ctxExcerpt}\n\`\`\``);
     }
   }
 
@@ -489,13 +505,14 @@ const GITX_COMMAND_REFERENCE = `
 | gitx config show | Display current configuration (secrets redacted) |
 | gitx config set <key> [value] | Set a single config value (provider, token, model, etc.) |
 | gitx commit [-m msg] [--push] [--dry-run] | AI-generate commit message → commit (optionally push) |
-| gitx push [-b branch] [--dry-run] | Stage → AI-commit → push in one step |
+| gitx push [-b branch] [--staged] [--dry-run] | Stage → AI-commit → push in one step; --staged uses already-staged files only |
 | gitx sync [--base branch] [--strategy merge|rebase] [--continue] [--abort] | Sync current branch with base; AI resolves conflicts |
+| gitx port <target…> [--base branch] [--no-pr] [--draft] [--continue] [--abort] | Cherry-pick commits onto other branches with incremental detection |
 | gitx implement "<task>" [--mode plan|guided|semi-auto|auto] [--dry-run] | AI-plan and implement a task end-to-end |
 | gitx pr list [--state open|closed|all] | List pull requests |
 | gitx pr create [--title T] [--body B] [--draft] [--dry-run] | AI-generate PR title/body → open PR |
-| gitx pr review <number> [--no-comment] [--address] [--no-push] | Senior-dev AI review with inline comments |
-| gitx pr fix-comments <number> [--dry-run] [--no-push] | AI-fix review comments and push |
+| gitx pr review <number> [--no-comment] [--inline] | Senior-dev AI review — posts inline comments to the PR |
+| gitx pr resolve <number> [--no-commit] [--no-push] [--dry-run] | AI-fix review comments in code; --no-commit applies fixes without committing |
 | gitx pr merge <number> [--strategy squash|merge|rebase] [--delete-branch] | Merge a PR |
 | gitx pr close <number> [-f] | Close a PR |
 | gitx ask "<question>" [--pr] | Ask a question about the repo using AI + live git context |

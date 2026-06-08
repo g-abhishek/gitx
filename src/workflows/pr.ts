@@ -131,8 +131,10 @@ export async function runReviewWorkflow(
   const allTracked = await listTrackedFiles(cwd);
   const allChangedPaths = parseChangedPathsFromDiff(diff);
 
-  // Filter out lockfiles / generated files — they waste tokens and add no review value
-  const changedPaths = allChangedPaths.filter(isReviewableFile).slice(0, 8);
+  // Filter out lockfiles / generated files — they waste tokens and add no review value.
+  // No file count cap — per-file budgets in buildSeniorReviewPrompt already control
+  // total size. Dropping files arbitrarily is worse than sending all of them.
+  const changedPaths = allChangedPaths.filter(isReviewableFile);
   const skippedCount = allChangedPaths.length - changedPaths.length;
 
   // Read full content of changed files
@@ -143,7 +145,8 @@ export async function runReviewWorkflow(
   }
 
   // Read supporting context files (imported by the changed files)
-  const ctxPaths = await findContextFiles(changedPaths, allTracked, cwd, 5);
+  // 10 context files gives the AI a solid picture of the codebase structure
+  const ctxPaths = await findContextFiles(changedPaths, allTracked, cwd, 10);
   const contextFiles: Record<string, string> = {};
   for (const p of ctxPaths) {
     const content = await readRepoFile(p, cwd);
