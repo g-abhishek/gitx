@@ -16,6 +16,7 @@ gitx wraps your everyday git operations with AI to generate commit messages, wri
   - [gitx commit](#gitx-commit)
   - [gitx push](#gitx-push)
   - [gitx sync](#gitx-sync)
+  - [Port commands — which one do I need?](#port-commands--which-one-do-i-need)
   - [gitx port](#gitx-port)
   - [gitx implement](#gitx-implement)
   - [gitx pr create](#gitx-pr-create)
@@ -221,6 +222,23 @@ gitx sync --abort                      # cancel an in-progress operation
 **AI conflict resolution:** When a merge/rebase conflict is detected, gitx asks the AI to resolve it. High-confidence resolutions are applied automatically; low-confidence ones are shown to you for confirmation.
 
 To address review comments before syncing, run `gitx pr resolve <number>` first.
+
+---
+
+### Port commands — which one do I need?
+
+gitx has two port commands and one cherry-pick command. They solve different problems:
+
+| Command | Source of commits | Destination | Current branch touched? |
+|---------|------------------|-------------|------------------------|
+| `gitx port <targets…>` | Your **current branch** (`base..HEAD`) | One or more other branches | Never — port branches are created separately |
+| `gitx pr port <number> <targets…>` | A **specific PR** (by number) — fetched from the provider | One or more other branches | Never — port branches are created separately |
+| `gitx pr cherry-pick <number>` | A **specific PR** (by number) | Your **current branch** | Yes — commits are applied directly onto it |
+
+**Quick decision guide:**
+- "I'm on my feature branch and want to port my own commits to `release/v2`" → `gitx port release/v2`
+- "I want to port PR #12345 to `release/v1` and `release/v2` without switching branches" → `gitx pr port 12345 release/v1 release/v2`
+- "I want to pull someone else's PR commits into my current branch" → `gitx pr cherry-pick 12345`
 
 ---
 

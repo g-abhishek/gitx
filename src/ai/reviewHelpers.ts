@@ -562,8 +562,9 @@ Rules:
 - Answer concisely and accurately. Get to the point immediately.
 - For setup/diagnostic questions: state clearly whether it IS or IS NOT configured, then explain WHY and how to fix it.
 - Never fabricate details — only use what is in the provided context.
-- Format your answer in plain text. Use a code block only for commands or file paths.
+- Format your answer in plain text. Use a code block only for gitx/git commands.
 - When suggesting commands, put them in suggestedCommands so they render highlighted.
+- Do NOT reference internal source file paths, line numbers, or implementation details (e.g. do not say "in src/cli/commands/port.ts line 328"). Answer from the GITX COMMAND REFERENCE and live repo context only.
 
 Respond with ONLY valid JSON (no markdown fences):
 {"answer":"<answer text>","suggestedCommands":["<cmd1>","<cmd2>"]}
@@ -647,11 +648,26 @@ export function buildAskPrompt(question: string, ctx: AiAskContext): string {
 
 /**
  * Safely parses the AI JSON response for `gitx ask`.
- * Falls back to using the raw text as the answer if JSON parsing fails.
+ *
+ * Uses regex extraction to locate the JSON object within the raw text, which
+ * handles cases where the AI adds prose or a markdown code fence before/after
+ * the JSON blob. Falls back to using the raw text as the answer only when no
+ * JSON object can be found at all.
  */
 export function parseAskResponse(raw: string): AiAskResponse {
   try {
-    const parsed = JSON.parse(raw) as Partial<AiAskResponse>;
+    // 1. Strip markdown code fences (```json … ``` or ``` … ```)
+    const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+    const candidate = fenced?.[1]?.trim() ?? raw.trim();
+
+    // 2. Extract the first complete JSON object
+    const start = candidate.search(/\{/);
+    const end   = candidate.lastIndexOf("}");
+    if (start === -1 || end <= start) throw new Error("no JSON object found");
+
+    const jsonStr = candidate.slice(start, end + 1);
+    const parsed = JSON.parse(jsonStr) as Partial<AiAskResponse>;
+
     return {
       answer: parsed.answer?.trim() ?? raw.trim(),
       suggestedCommands: Array.isArray(parsed.suggestedCommands)
