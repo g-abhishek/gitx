@@ -50,10 +50,20 @@ function redactConfig(config: GitxConfig): unknown {
       ? { type: "local CLI" }
       : { apiKey: v?.apiKey ? v.apiKey.slice(0, 6) + "***" : "(none)", ...(v?.model ? { model: v.model } : {}) };
   }
+  const jira = config.jira
+    ? {
+        url: config.jira.url,
+        email: config.jira.email,
+        apiToken: config.jira.apiToken.slice(0, 6) + "***",
+        ...(config.jira.projectKey ? { projectKey: config.jira.projectKey } : {}),
+      }
+    : undefined;
+
   return {
     ...config,
     providers,
     ...(Object.keys(aiProviders).length ? { aiProviders } : {}),
+    ...(jira ? { jira } : {}),
     ai: undefined,
   };
 }
@@ -116,30 +126,40 @@ export function registerConfigCommand(program: Command): void {
         }
       }
 
+      // Show Jira status
+      if (cfg.jira) {
+        logger.success(`\n🎫 Jira: ${cfg.jira.url}  (${cfg.jira.email})${cfg.jira.projectKey ? `  Project: ${cfg.jira.projectKey}` : ""}`);
+      } else {
+        logger.info("\n🎫 Jira: not configured — run: gitx config set jira");
+      }
+
       logger.info(`\n📍 Config file: ${getConfigPath()}`);
       logger.info(JSON.stringify(redactConfig(cfg), null, 2));
     });
 
   // ── gitx config set <KEY> [value] ─────────────────────────────────────────
-  // KEY = github | gitlab | azure | claude | openai | claude-cli
+  // KEY = github | gitlab | azure | claude | openai | claude-cli | jira
   config
     .command("set")
     .description(
       "🔑 Set a provider token or AI key (also sets it as the default AI)\n" +
-      "  Git: gitx config set github|gitlab|azure [token]\n" +
-      "  AI:  gitx config set claude|openai [apiKey]\n" +
-      "       gitx config set claude-cli"
+      "  Git:  gitx config set github|gitlab|azure [token]\n" +
+      "  AI:   gitx config set claude|openai [apiKey]\n" +
+      "        gitx config set claude-cli\n" +
+      "  Jira: gitx config set jira"
     )
-    .argument("<key>", "Provider: github | gitlab | azure | claude | openai | claude-cli")
-    .argument("[value]", "Token or API key (prompted if omitted; not needed for claude-cli)")
+    .argument("<key>", "Provider: github | gitlab | azure | claude | openai | claude-cli | jira")
+    .argument("[value]", "Token or API key (prompted if omitted; not needed for claude-cli or jira)")
     .action(async (key: string, valueArg?: string) => {
       if (isGitProvider(key)) {
         await setGitProvider(key, valueArg);
       } else if (isAiProvider(key)) {
         await setAiProvider(key, valueArg);
+      } else if (key === "jira") {
+        await setJiraConfig();
       } else {
         throw new GitxError(
-          `Unknown key: "${key}". Use one of: github, gitlab, azure, claude, openai, claude-cli`,
+          `Unknown key: "${key}". Use one of: github, gitlab, azure, claude, openai, claude-cli, jira`,
           { exitCode: 2 }
         );
       }
@@ -407,6 +427,74 @@ async function setAiProvider(aiProvider: AiProviderKey, keyArg?: string): Promis
   spinner.succeed(`Saved to ${path}`);
   logger.success(`✅ ${aiProvider} configured and set as default AI provider.`);
   logger.info("   Note: ANTHROPIC_API_KEY env var always overrides stored keys.");
+}
+
+// ─── Set Jira config ──────────────────────────────────────────────────────────
+
+async function setJiraConfig(): Promise<void> {
+  const existing = await loadOrEmpty();
+  const current = existing.jira;
+
+  logger.info("\n🎫 Jira integration setup\n");
+  logger.info("   This lets you run:  gitx implement --jira PROJ-123");
+  logger.info("   gitx will read the ticket, implement it, and link the PR back.\n");
+
+  const { url } = await inquirer.prompt<{ url: string }>([
+    {
+      type: "input",
+      name: "url",
+      message: "Jira base URL (e.g. https://yourorg.atlassian.net):",
+      default: current?.url,
+      validate: (v: string) => v.trim().startsWith("http") ? true : "Must be a valid URL starting with http(s)://",
+    },
+  ]);
+
+  const { email } = await inquirer.prompt<{ email: string }>([
+    {
+      type: "input",
+      name: "email",
+      message: "Atlassian account email:",
+      default: current?.email,
+      validate: validateNonEmpty("Email"),
+    },
+  ]);
+
+  logger.info("\n   ℹ️  Create an API token at: https://id.atlassian.com/manage-profile/security/api-tokens\n");
+
+  const { apiToken } = await inquirer.prompt<{ apiToken: string }>([
+    {
+      type: "password",
+      name: "apiToken",
+      message: "Atlassian API token:",
+      mask: "*",
+      validate: validateNonEmpty("API token"),
+    },
+  ]);
+
+  const { projectKey } = await inquirer.prompt<{ projectKey: string }>([
+    {
+      type: "input",
+      name: "projectKey",
+      message: "Default project key (optional, e.g. PROJ — lets you use --jira 123 instead of PROJ-123):",
+      default: current?.projectKey ?? "",
+    },
+  ]);
+
+  const updated: GitxConfig = {
+    ...existing,
+    jira: {
+      url: url.trim().replace(/\/$/, ""),
+      email: email.trim(),
+      apiToken: apiToken.trim(),
+      ...(projectKey.trim() ? { projectKey: projectKey.trim().toUpperCase() } : {}),
+    },
+  };
+
+  const spinner = ora("Saving…").start();
+  const path = await saveConfig(updated);
+  spinner.succeed(`Saved to ${path}`);
+  logger.success("✅ Jira configured!");
+  logger.info(`   Use it: gitx implement --jira ${updated.jira?.projectKey ? `${updated.jira.projectKey}-123` : "PROJ-123"}`);
 }
 
 // ─── Switch default AI ────────────────────────────────────────────────────────

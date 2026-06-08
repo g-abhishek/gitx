@@ -46,7 +46,7 @@ src/
 │           └── review.ts        gitx pr review — senior-dev AI review
 │
 ├── workflows/
-│   ├── implement.ts         Full task implementation orchestration
+│   ├── implement.ts         Full task implementation orchestration (Jira support, multi-step context refresh)
 │   ├── pr.ts                PR review & resolve workflows
 │   └── prAddress.ts         Address PR comments workflow (used by sync + review)
 │
@@ -84,6 +84,7 @@ src/
 │   ├── gitOps.ts            All git command wrappers (branch, diff, commit, stat, etc.)
 │   ├── git.ts               Low-level git utilities (remote URL, slug inference)
 │   ├── azureAuth.ts         Azure DevOps GCM OAuth helpers (getTokenViaGcm, verifyGcmSetup)
+│   ├── jira.ts              Jira REST API v3 helpers (fetchJiraTicket, addJiraComment, transitionJiraTicket)
 │   ├── errors.ts            GitxError class with exit codes
 │   ├── lockFile.ts          withLockRetry() for concurrent git ops
 │   ├── retry.ts             Generic async retry utility
@@ -196,6 +197,38 @@ Handles Azure DevOps OAuth authentication via Git Credential Manager. No token i
 git config --global credential.azreposCredentialType oauth
 git config --global credential.https://dev.azure.com.useHttpPath true
 ```
+
+---
+
+## Jira Integration (`src/utils/jira.ts`)
+
+Provides Jira REST API v3 helpers used by `gitx implement --jira <ticket-id>`. Uses HTTP Basic auth (email + API token). No third-party SDK — built on Node 18+ native `fetch`.
+
+| Export | Purpose |
+|--------|---------|
+| `fetchJiraTicket(ticketId, cfg)` | Fetch full ticket details (summary, description, ACs, subtasks, status) |
+| `addJiraComment(ticketId, comment, cfg)` | Post an ADF comment (e.g. PR link) to a ticket |
+| `transitionJiraTicket(ticketId, status, cfg)` | Look up available transitions and move the ticket to the named status |
+| `buildTaskFromTicket(ticket)` | Convert a `JiraTicket` into a task string for the AI (summary + description + ACs + subtasks) |
+| `resolveTicketId(raw, cfg)` | Expand `"123"` → `"PROJ-123"` using `config.jira.projectKey` |
+
+**Config** (`~/.gitxrc`):
+```json
+"jira": {
+  "url": "https://yourorg.atlassian.net",
+  "email": "you@yourorg.com",
+  "apiToken": "...",
+  "projectKey": "PROJ"
+}
+```
+Set up via `gitx config set jira` (interactive wizard).
+
+**`gitx implement --jira` flow:**
+1. `resolveTicketId` normalizes the ticket ID
+2. `fetchJiraTicket` loads ticket data (ADF description is converted to plain text)
+3. `buildTaskFromTicket` builds the task string injected into the AI context
+4. Branch name: `feature/<TICKET-KEY>-short-slug`; commit/PR title includes `(TICKET-KEY)` scope
+5. After PR creation: `addJiraComment` (if `--jira-comment`) and `transitionJiraTicket` (if `--jira-transition`)
 
 ---
 
@@ -318,12 +351,14 @@ GitHub sometimes rejects inline review comments (422 "Line could not be resolved
 | Change | README.md section | CLAUDE.md section |
 |--------|-------------------|-------------------|
 | New command | Commands table + new section | Repository Layout + Adding a New Command |
+| New PR subcommand (e.g. cherry-pick, port) | Commands ToC + new section under `gitx pr *` | Repository Layout pr/ tree |
 | New flag on existing command | That command's section | (if the flag changes architecture) Core Abstractions |
 | New AI method | (none, internal) | AiClient interface table |
 | New git helper | (none, internal) | git Helpers table |
 | New util file | (none, internal) | Repository Layout utils tree |
 | New provider (git or AI) | Supported Providers | Adding a New Provider section |
 | New auth method on existing provider | Configuration section (Azure section) | Azure GCM Authentication |
+| New third-party integration (e.g. Jira) | Configuration section (new subsection) + that command's section | Repository Layout utils tree + new integration section |
 | New shared prompt helper | (none, internal) | Shared Prompt Helpers table |
 | Environment variable | Environment Variables | Environment Variables |
 | Config key | Configuration section | (as needed) |

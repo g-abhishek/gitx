@@ -1,5 +1,20 @@
 export type AiProviderKind = "claude" | "openai" | "claude-cli";
 
+/**
+ * Jira integration config.
+ * Stored in ~/.gitxrc under the "jira" key.
+ */
+export interface JiraConfig {
+  /** Your Atlassian base URL, e.g. "https://yourorg.atlassian.net" */
+  url: string;
+  /** The Atlassian account email used for API auth */
+  email: string;
+  /** Atlassian API token (generate at id.atlassian.com/manage-profile/security/api-tokens) */
+  apiToken: string;
+  /** Optional default project key (e.g. "PROJ") — used when only a ticket number is supplied */
+  projectKey?: string;
+}
+
 export interface AiProviderEntry {
   /** Not needed for "claude-cli" */
   apiKey?: string;
@@ -51,6 +66,12 @@ export interface GitxConfig {
    * Default base branch when it can't be inferred from the remote.
    */
   defaultBranch?: string;
+
+  /**
+   * Optional Jira integration. When configured, `gitx implement --jira PROJ-123`
+   * reads the ticket and uses it as the task description.
+   */
+  jira?: JiraConfig;
 
   /**
    * @deprecated Use aiProviders + defaultAiProvider.

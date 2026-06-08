@@ -509,6 +509,8 @@ const GITX_COMMAND_REFERENCE = `
 | gitx sync [--base branch] [--strategy merge|rebase] [--continue] [--abort] | Fetch + merge/rebase base into current branch; AI auto-resolves conflicts. Run "gitx pr resolve" first if you have open review comments. |
 | gitx port <target…> [--base branch] [--no-pr] [--draft] [--continue] [--abort] | Cherry-pick commits onto other branches with incremental detection |
 | gitx implement "<task>" [--mode plan|guided|semi-auto|auto] [--dry-run] | AI-plan and implement a task end-to-end |
+| gitx implement --jira <ticket-id> [--mode …] [--jira-comment] [--jira-transition <status>] | Load task from Jira ticket, implement it, optionally comment on ticket and transition its status |
+| gitx config set jira | Interactive wizard to configure Jira URL, email, API token, and default project key |
 | gitx pr list [--state open|closed|all] | List pull requests |
 | gitx pr create [--title T] [--body B] [--draft] [--dry-run] | AI-generate PR title/body → open PR |
 | gitx pr review <number> [--no-comment] [--inline] | Senior-dev AI review — posts inline comments to the PR |

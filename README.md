@@ -16,6 +16,7 @@ gitx wraps your everyday git operations with AI to generate commit messages, wri
   - [gitx commit](#gitx-commit)
   - [gitx push](#gitx-push)
   - [gitx sync](#gitx-sync)
+  - [gitx port](#gitx-port)
   - [gitx implement](#gitx-implement)
   - [gitx pr create](#gitx-pr-create)
   - [gitx pr review](#gitx-pr-review)
@@ -110,6 +111,21 @@ gitx config set azure
 ```
 
 With GCM configured, gitx calls `git credential fill` at runtime to obtain a short-lived OAuth token. GCM handles browser login (once) and silent token refresh automatically.
+
+### Jira integration
+
+Connect gitx to Jira so `gitx implement --jira` can read tickets directly:
+
+```bash
+gitx config set jira
+# Interactive wizard prompts for:
+#   • Atlassian base URL  (e.g. https://yourorg.atlassian.net)
+#   • Account email
+#   • API token          (generate at id.atlassian.com → Security → API tokens)
+#   • Default project key (optional, e.g. PROJ — lets you use bare ticket numbers like --jira 123)
+```
+
+Config is stored in `~/.config/gitx/config.json` under the `"jira"` key. The API token is redacted in `gitx config show`.
 
 ---
 
@@ -241,13 +257,21 @@ gitx port --abort                      # abandon a stuck port
 
 ### gitx implement
 
-Give the AI a task in plain English. It analyzes the repo, creates a plan, generates and applies diffs, commits, pushes, and opens a PR.
+Give the AI a task in plain English (or a Jira ticket). It analyzes the repo, creates a step-by-step plan, generates and applies diffs, commits, pushes, and opens a PR.
 
 ```bash
+# Manual task
 gitx implement "add pagination to the users endpoint"
 gitx implement "fix the null pointer on login" --mode guided
 gitx implement "refactor auth module" --mode plan    # plan only, no code changes
 gitx implement "add unit tests for utils" --dry-run  # preview plan, no commits
+
+# Jira-driven (requires gitx config set jira)
+gitx implement --jira PROJ-123
+gitx implement --jira 123                          # uses configured projectKey
+gitx implement --jira PROJ-123 --jira-comment      # post PR URL as comment on ticket
+gitx implement --jira PROJ-123 --jira-transition "In Progress"   # move ticket status
+gitx implement --jira PROJ-123 --mode auto --jira-comment --jira-transition "In Review"
 ```
 
 **Autonomy modes:**
@@ -255,9 +279,17 @@ gitx implement "add unit tests for utils" --dry-run  # preview plan, no commits
 | Mode | Behaviour |
 |------|-----------|
 | `plan` | Analyze and generate a plan — no code changes |
-| `guided` | Confirm after every AI step |
+| `guided` | Confirm analysis, plan, and each step's diff before applying |
 | `semi-auto` | Confirm once before execution begins |
 | `auto` | Fully automatic end-to-end |
+
+**Jira integration** — set up once, then drive all your tickets automatically:
+
+```bash
+gitx config set jira     # interactive wizard: URL, email, API token, project key
+```
+
+When `--jira` is used, the branch is named `feature/<PROJ-123>-short-description` and the PR title/body include the ticket key and a link to Jira. Pass `--jira-comment` to have gitx post the PR URL back to the ticket, and `--jira-transition` to move the ticket to a new status.
 
 ---
 
@@ -411,7 +443,10 @@ gitx config                         # run interactive setup wizard
 gitx config setup                   # same as above
 gitx config show                    # display current config (secrets redacted)
 gitx config set github              # configure GitHub token
+gitx config set gitlab              # configure GitLab token
+gitx config set azure               # configure Azure DevOps (PAT or GCM)
 gitx config set openai              # configure OpenAI API key
+gitx config set jira                # configure Jira integration (URL, email, API token)
 gitx config set-default-ai claude   # switch AI provider
 gitx config set-default-branch main # set default base branch
 ```

@@ -78,5 +78,15 @@ export function isGitxConfig(value: unknown): value is GitxConfig {
     return false;
   }
 
+  // jira is optional but if present must have url, email, and apiToken
+  const jira = value["jira"];
+  if (jira !== undefined) {
+    if (!isRecord(jira)) return false;
+    if (typeof jira["url"] !== "string" || !jira["url"].trim()) return false;
+    if (typeof jira["email"] !== "string" || !jira["email"].trim()) return false;
+    if (typeof jira["apiToken"] !== "string" || !jira["apiToken"].trim()) return false;
+    if (jira["projectKey"] !== undefined && typeof jira["projectKey"] !== "string") return false;
+  }
+
   return true;
 }

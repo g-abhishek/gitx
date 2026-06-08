@@ -9,16 +9,34 @@ import { parseAutonomyMode } from "../../utils/modes.js";
 import { runImplementWorkflow } from "../../workflows/implement.js";
 import { isWorkingTreeDirty } from "../../utils/gitOps.js";
 import type { AiAnalyzeTaskResponse, AiGeneratePlanResponse } from "../../ai/types.js";
+import {
+  fetchJiraTicket,
+  buildTaskFromTicket,
+  resolveTicketId,
+  addJiraComment,
+  transitionJiraTicket,
+} from "../../utils/jira.js";
 
 export function registerImplementCommand(program: Command): void {
   program
     .command("implement")
     .description("🛠️  Implement a task with AI assistance")
-    .argument("<task>", "Task description")
+    .argument("[task]", "Task description (omit when using --jira)")
     .option("--mode <mode>", "plan|guided|semi-auto|auto", "guided")
     .option("--dry-run", "Simulate execution — no files changed, no commits", false)
-    .action(async (task: string, options: { mode: string; dryRun: boolean }) => {
-      assertValid(validateNonEmpty("Task")(task), "Task");
+    .option("--jira <ticket-id>", "Load the task from a Jira ticket (e.g. PROJ-123 or just 123 if projectKey is configured)")
+    .option("--jira-comment", "Post a comment on the Jira ticket with the PR URL when done", false)
+    .option("--jira-transition <status>", "Transition the Jira ticket to this status after PR is created (e.g. \"In Progress\")")
+    .action(async (
+      taskArg: string | undefined,
+      options: {
+        mode: string;
+        dryRun: boolean;
+        jira?: string;
+        jiraComment?: boolean;
+        jiraTransition?: string;
+      }
+    ) => {
       const mode = parseAutonomyMode(options.mode) as AutonomyMode;
       const dryRun = options.dryRun;
 
@@ -33,26 +51,68 @@ export function registerImplementCommand(program: Command): void {
         throw err;
       }
 
+      // ── Resolve the task description ──────────────────────────────────────
+      let task: string;
+      let jiraTicketKey: string | undefined;
+
+      if (options.jira) {
+        // ── Jira mode: fetch ticket and build task from it ───────────────────
+        if (!gitx.config.jira) {
+          logger.error(
+            "❌ Jira is not configured. Run `gitx config set jira` to set up your credentials."
+          );
+          process.exitCode = 1;
+          return;
+        }
+
+        const ticketId = resolveTicketId(options.jira, gitx.config.jira);
+        jiraTicketKey = ticketId;
+
+        const jiraSpinner = ora(`Fetching Jira ticket ${ticketId}…`).start();
+        try {
+          const ticket = await fetchJiraTicket(ticketId, gitx.config.jira);
+          task = buildTaskFromTicket(ticket);
+          jiraSpinner.succeed(
+            `Loaded ${ticketId}: "${ticket.summary}" (${ticket.type} · ${ticket.status})`
+          );
+          if (ticket.assignee) logger.info(`   Assignee: ${ticket.assignee}`);
+          if (ticket.subtasks.length > 0) logger.info(`   Subtasks: ${ticket.subtasks.length}`);
+        } catch (err: unknown) {
+          jiraSpinner.fail(`Failed to fetch Jira ticket: ${err instanceof Error ? err.message : String(err)}`);
+          process.exitCode = 1;
+          return;
+        }
+      } else {
+        // ── Manual task mode ─────────────────────────────────────────────────
+        if (!taskArg) {
+          logger.error("❌ Provide a task description or use --jira <ticket-id>.");
+          process.exitCode = 1;
+          return;
+        }
+        assertValid(validateNonEmpty("Task")(taskArg), "Task");
+        task = taskArg;
+      }
+
       // ── Guard: warn if AI is not available ─────────────────────────────────
-      if (!process.env["ANTHROPIC_API_KEY"]) {
+      if (!await Gitx.isAiAvailable(gitx.config)) {
         logger.warn(
-          "⚠️  ANTHROPIC_API_KEY is not set. AI responses will be mocked placeholders.\n" +
-          "   Export it to use real Claude: export ANTHROPIC_API_KEY=sk-ant-..."
+          "⚠️  No AI provider configured — responses will be mocked placeholders.\n" +
+          "   Run `gitx config` to set up an AI provider (Claude, OpenAI, or claude-cli)."
         );
         if (mode !== "plan") {
-          const { continueAnyway } = await (await import("inquirer")).default.prompt<{ continueAnyway: boolean }>([
+          const { continueAnyway } = await inquirer.prompt<{ continueAnyway: boolean }>([
             { type: "confirm", name: "continueAnyway", message: "Continue with mock AI anyway?", default: false },
           ]);
           if (!continueAnyway) { logger.warn("Cancelled."); return; }
         }
       }
 
-      // ── Guard: uncommitted changes would be lost when we create a branch ───
+      // ── Guard: uncommitted changes ─────────────────────────────────────────
       if (mode !== "plan" && !options.dryRun) {
         const dirty = await isWorkingTreeDirty(gitx.cwd);
         if (dirty) {
           logger.warn("⚠️  You have uncommitted changes in your working tree.");
-          const { action } = await (await import("inquirer")).default.prompt<{ action: string }>([
+          const { action } = await inquirer.prompt<{ action: string }>([
             {
               type: "list",
               name: "action",
@@ -87,22 +147,18 @@ export function registerImplementCommand(program: Command): void {
         return;
       }
 
-      // ── modes: guided / semi-auto / auto ──────────────────────────────────
+      // ── modes: guided / semi-auto / auto ───────────────────────────────────
       const result = await runImplementWorkflow(gitx, {
         task,
         mode,
         dryRun,
+        jiraTicketKey,
 
         onAnalysis: async (analysis: AiAnalyzeTaskResponse): Promise<boolean> => {
           printAnalysis(analysis);
           if (mode === "guided") {
             const { proceed } = await inquirer.prompt<{ proceed: boolean }>([
-              {
-                type: "confirm",
-                name: "proceed",
-                message: "Continue with this analysis and generate a plan?",
-                default: true,
-              },
+              { type: "confirm", name: "proceed", message: "Continue with this analysis?", default: true },
             ]);
             return proceed;
           }
@@ -126,6 +182,24 @@ export function registerImplementCommand(program: Command): void {
           }
           return true;
         },
+
+        // In guided mode show each step's diffs and ask before applying
+        onStepDiff: mode === "guided"
+          ? async (stepTitle: string, diffs: Array<{ path: string; unifiedDiff: string }>): Promise<boolean> => {
+              logger.info(`\n📝 Diffs for: ${stepTitle}`);
+              for (const d of diffs) {
+                logger.info(`\n   📄 ${d.path}`);
+                const lines = d.unifiedDiff.split("\n");
+                const preview = lines.slice(0, 25).join("\n");
+                logger.info(preview);
+                if (lines.length > 25) logger.info(`   … (${lines.length - 25} more lines)`);
+              }
+              const { apply } = await inquirer.prompt<{ apply: boolean }>([
+                { type: "confirm", name: "apply", message: "Apply this step?", default: true },
+              ]);
+              return apply;
+            }
+          : undefined,
       });
 
       // ── Show result ────────────────────────────────────────────────────────
@@ -145,15 +219,37 @@ export function registerImplementCommand(program: Command): void {
       logger.success("\n✅ Implementation complete!");
       logger.info(`Branch:  ${result.branchName}`);
       logger.info(`Commit:  ${result.commitSha?.slice(0, 8) ?? "–"}`);
-
-      if (result.pr) {
-        logger.success(`PR:      ${result.pr.url}`);
-      }
+      if (result.pr) logger.success(`PR:      ${result.pr.url}`);
 
       if (result.failedSteps.length > 0) {
         logger.warn(`\n⚠️  Some steps failed to apply:`);
-        for (const f of result.failedSteps) {
-          logger.warn(`  • ${f.stepId}: ${f.error}`);
+        for (const f of result.failedSteps) logger.warn(`  • ${f.stepId}: ${f.error}`);
+      }
+
+      // ── Jira post-PR actions ───────────────────────────────────────────────
+      if (jiraTicketKey && gitx.config.jira && result.pr) {
+        if (options.jiraComment) {
+          const commentSpinner = ora(`Adding comment to ${jiraTicketKey}…`).start();
+          try {
+            await addJiraComment(
+              jiraTicketKey,
+              `🤖 gitx created a PR for this ticket:\n${result.pr.url}\n\nBranch: ${result.branchName}`,
+              gitx.config.jira
+            );
+            commentSpinner.succeed(`Comment added to ${jiraTicketKey}`);
+          } catch (err: unknown) {
+            commentSpinner.warn(`Could not add Jira comment: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+
+        if (options.jiraTransition) {
+          const transSpinner = ora(`Transitioning ${jiraTicketKey} → "${options.jiraTransition}"…`).start();
+          try {
+            await transitionJiraTicket(jiraTicketKey, options.jiraTransition, gitx.config.jira);
+            transSpinner.succeed(`${jiraTicketKey} is now "${options.jiraTransition}"`);
+          } catch (err: unknown) {
+            transSpinner.warn(`Transition failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
         }
       }
     });
