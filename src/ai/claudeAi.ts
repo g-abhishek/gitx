@@ -294,50 +294,16 @@ Step Description: ${s.description ?? ""}${fileContentsSection}`;
   }
 
   async suggestFixes(comment: unknown): Promise<AiSuggestFixesResponse> {
-    const c = comment as {
-      comments?: Array<{ body: string; path?: string; line?: number; author?: string }>;
-      prTitle?: string;
-      prBody?: string;
-      fileContents?: Record<string, string>;
-    };
-
-    const commentsText = (c.comments ?? [])
-      .map(
-        (co) =>
-          `[${co.author ?? "reviewer"}${co.path ? ` on ${co.path}:${co.line ?? ""}` : ""}]: ${co.body}`
-      )
-      .join("\n\n");
-
-    const fileContentsSection =
-      c.fileContents && Object.keys(c.fileContents).length > 0
-        ? `\n\nCurrent file contents:\n${Object.entries(c.fileContents)
-            .map(([p, content]) => `--- ${p} ---\n${content}`)
-            .join("\n\n")}`
-        : "";
-
-    const system = `You are an expert code reviewer suggesting fixes for pull request review comments. Respond with ONLY valid JSON:
-{
-  "suggestedEdits": [
-    {
-      "path": "<file path>",
-      "rationale": "<why this change addresses the comment>",
-      "unifiedDiff": "<valid unified diff>"
-    }
-  ]
-}
-If a comment doesn't require a code change, omit it from suggestedEdits.`;
-
-    const userPrompt = `PR Title: ${c.prTitle ?? ""}
-PR Body: ${c.prBody ?? ""}
-
-Review Comments:
-${commentsText}${fileContentsSection}`;
-
-    const text = await callClaude(system, userPrompt, this.apiKey, this.model);
-    const parsed = parseJson<Partial<AiSuggestFixesResponse>>(text, { suggestedEdits: [] });
-    return {
-      suggestedEdits: Array.isArray(parsed.suggestedEdits) ? parsed.suggestedEdits : [],
-    };
+    const { buildSuggestFixesSystem, buildSuggestFixesPrompt, parseSuggestFixesResponse } =
+      await import("./reviewHelpers.js");
+    const ctx = comment as Parameters<typeof buildSuggestFixesPrompt>[0];
+    const text = await callClaude(
+      buildSuggestFixesSystem(),
+      buildSuggestFixesPrompt(ctx),
+      this.apiKey,
+      this.model
+    );
+    return parseSuggestFixesResponse(text);
   }
 
   async reviewPR(context: unknown): Promise<AiReviewPRResponse> {

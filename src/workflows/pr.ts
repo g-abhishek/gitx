@@ -289,34 +289,92 @@ export async function runFixCommentsWorkflow(
   const ctx = await gitx.getRepoContext();
   const provider = createProvider(ctx);
 
-  logger.info(`🔍 Fetching PR #${prNumber}…`);
+  const fetchSpinner = ora("Fetching PR, comments and diff…").start();
   const pr = await provider.getPR(ctx.repoSlug, prNumber);
-
-  logger.info("💬 Fetching review comments…");
-  const comments = await provider.getPRComments(ctx.repoSlug, prNumber);
+  const [comments, diff] = await Promise.all([
+    provider.getPRComments(ctx.repoSlug, prNumber),
+    provider.getPRDiff(ctx.repoSlug, prNumber),
+  ]);
+  fetchSpinner.succeed(`PR #${prNumber}: "${pr.title}"  —  ${comments.length} comment(s)`);
 
   if (comments.length === 0) {
     logger.info("No review comments found.");
     return { pr, comments, appliedFixes: [], skippedFixes: [] };
   }
 
-  // Gather file contents for files mentioned in comments
+  // ── Build file context ────────────────────────────────────────────────────
+  // Only load files directly mentioned in comments + their close imports.
+  // Random repo source files are irrelevant — the AI is fixing specific lines.
+  const ctxSpinner = ora("Building file context for commented files…").start();
+
   const mentionedPaths = [...new Set(comments.map((c) => c.path).filter(Boolean) as string[])];
   const trackedFiles = await listTrackedFiles(cwd);
 
-  // Also include files mentioned in the PR body / title
-  const allSourceFiles = trackedFiles
-    .filter((f) => /\.(ts|js|tsx|jsx|py|go|rs|java|rb|cs|cpp|c|h)$/.test(f))
-    .slice(0, 15);
+  // File content strategy — same thresholds as the review workflow:
+  //   ≤ FULL_FILE_THRESHOLD lines  → send the whole file (AI needs full context to make correct edits)
+  //   larger files                 → show a generous window around each commented line
+  const FULL_FILE_THRESHOLD = 400;
+  const COMMENT_WINDOW      = 80;   // lines above/below a commented line in large files
+  const CTX_FILE_MAX        = 4_000; // chars per supporting context file
 
-  const relevantFiles = [...new Set([...mentionedPaths, ...allSourceFiles])].slice(0, 15);
   const fileContents: Record<string, string> = {};
-  for (const f of relevantFiles) {
-    const content = await readRepoFile(f, cwd);
-    if (content) fileContents[f] = content.slice(0, 4000);
+
+  // Commented lines per file — used for smart windowing on large files
+  const commentedLines: Record<string, number[]> = {};
+  for (const c of comments) {
+    if (c.path && c.line) {
+      (commentedLines[c.path] ??= []).push(c.line);
+    }
   }
 
-  logger.info("🧠 Generating AI-suggested fixes…");
+  for (const filePath of mentionedPaths) {
+    const content = await readRepoFile(filePath, cwd);
+    if (!content) continue;
+
+    const lines = content.split("\n");
+    if (lines.length <= FULL_FILE_THRESHOLD) {
+      // Small file — send it whole
+      fileContents[filePath] = lines
+        .map((l, i) => `${String(i + 1).padStart(5, " ")} | ${l}`)
+        .join("\n");
+    } else {
+      // Large file — show windows around commented lines
+      const targets = commentedLines[filePath] ?? [];
+      const included = new Set<number>();
+      for (const line of targets) {
+        for (let i = Math.max(0, line - COMMENT_WINDOW - 1); i < Math.min(lines.length, line + COMMENT_WINDOW); i++) {
+          included.add(i);
+        }
+      }
+      // If no specific lines, fall back to first FULL_FILE_THRESHOLD lines
+      const indices = included.size > 0 ? [...included].sort((a, b) => a - b) : [...Array(FULL_FILE_THRESHOLD).keys()];
+      let excerpt = "";
+      let prev = -1;
+      for (const idx of indices) {
+        if (prev !== -1 && idx > prev + 1) excerpt += `\n      … (${idx - prev - 1} lines omitted)\n`;
+        excerpt += `${String(idx + 1).padStart(5, " ")} | ${lines[idx]}\n`;
+        prev = idx;
+      }
+      fileContents[filePath] = excerpt.trimEnd();
+    }
+  }
+
+  // Add context files (imports of the mentioned files) for extra background
+  const ctxPaths = await findContextFiles(mentionedPaths, trackedFiles, cwd, 8);
+  for (const filePath of ctxPaths) {
+    if (fileContents[filePath]) continue; // already loaded
+    const content = await readRepoFile(filePath, cwd);
+    if (!content) continue;
+    fileContents[filePath] = content.length <= CTX_FILE_MAX
+      ? content
+      : content.slice(0, CTX_FILE_MAX) + "\n… (truncated)";
+  }
+
+  ctxSpinner.succeed(
+    `Context: ${mentionedPaths.length} commented file(s), ${ctxPaths.length} context file(s)`
+  );
+
+  const fixSpinner = ora("🧠 Generating AI-suggested fixes…").start();
   const fixResult = await gitx.ai.suggestFixes({
     comments: comments.map((c) => ({
       body: c.body,
@@ -326,8 +384,10 @@ export async function runFixCommentsWorkflow(
     })),
     prTitle: pr.title,
     prBody: pr.body,
+    diff,
     fileContents,
   });
+  fixSpinner.succeed(`AI generated ${fixResult.suggestedEdits.length} fix(es).`);
 
   const appliedFixes: Array<{ path: string; rationale: string }> = [];
   const skippedFixes: Array<{ path: string; reason: string }> = [];

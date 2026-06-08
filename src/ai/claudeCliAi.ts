@@ -200,38 +200,11 @@ Description: ${s.description ?? ""}${fileContentsSection}`;
   }
 
   async suggestFixes(comment: unknown): Promise<AiSuggestFixesResponse> {
-    const c = comment as {
-      comments?: Array<{ body: string; path?: string; line?: number; author?: string }>;
-      prTitle?: string;
-      prBody?: string;
-      fileContents?: Record<string, string>;
-    };
-
-    const commentsText = (c.comments ?? [])
-      .map((co) => `[${co.author ?? "reviewer"}${co.path ? ` on ${co.path}:${co.line ?? ""}` : ""}]: ${co.body}`)
-      .join("\n\n");
-
-    const fileContentsSection =
-      c.fileContents && Object.keys(c.fileContents).length > 0
-        ? `\n\nCurrent file contents:\n${Object.entries(c.fileContents)
-            .map(([p, content]) => `--- ${p} ---\n${content}`)
-            .join("\n\n")}`
-        : "";
-
-    const system = `You are an expert code reviewer. Suggest fixes for PR review comments. Respond with ONLY valid JSON:
-{"suggestedEdits":[{"path":"<file>","rationale":"<why>","unifiedDiff":"<valid unified diff>"}]}
-Omit comments that need no code change.`;
-
-    const userPrompt = `PR: ${c.prTitle ?? ""}
-${c.prBody ?? ""}
-
-Review Comments:\n${commentsText}${fileContentsSection}`;
-
-    const text = await callClaudeCli(system, userPrompt);
-    const parsed = parseJson<Partial<AiSuggestFixesResponse>>(text, { suggestedEdits: [] });
-    return {
-      suggestedEdits: Array.isArray(parsed.suggestedEdits) ? parsed.suggestedEdits : [],
-    };
+    const { buildSuggestFixesSystem, buildSuggestFixesPrompt, parseSuggestFixesResponse } =
+      await import("./reviewHelpers.js");
+    const ctx = comment as Parameters<typeof buildSuggestFixesPrompt>[0];
+    const text = await callClaudeCli(buildSuggestFixesSystem(), buildSuggestFixesPrompt(ctx));
+    return parseSuggestFixesResponse(text);
   }
 
   async reviewPR(context: unknown): Promise<AiReviewPRResponse> {

@@ -659,3 +659,99 @@ export function parseAskResponse(raw: string): AiAskResponse {
     return { answer: raw.trim(), suggestedCommands: [] };
   }
 }
+
+// ─── suggestFixes helpers (used by gitx pr resolve) ──────────────────────────
+
+export interface SuggestFixesContext {
+  comments: Array<{ body: string; path?: string; line?: number; author?: string }>;
+  prTitle?: string;
+  prBody?: string;
+  /** Full unified diff of the PR — tells the AI what changed vs. the base */
+  diff?: string;
+  /** File contents keyed by relative path (with line numbers prefixed) */
+  fileContents?: Record<string, string>;
+}
+
+export interface SuggestFixesResponse {
+  suggestedEdits: Array<{ path: string; rationale: string; unifiedDiff: string }>;
+}
+
+export function buildSuggestFixesSystem(): string {
+  return `You are a senior software engineer resolving pull request review comments by making precise code fixes.
+
+You are given:
+  1. The PR title and description (for context)
+  2. The unified diff of the PR (shows exactly what changed vs. the base branch)
+  3. The current file contents of every file that has comments (with line numbers)
+  4. The review comments, each tagged with the file and line they target
+
+Your job:
+  - For each comment that requires a code change, produce a minimal, correct unified diff that fixes it
+  - The diff MUST apply cleanly to the CURRENT file content shown (not the base)
+  - Preserve the existing code style, indentation, and patterns
+  - If a comment is a question or praise (no code change needed), omit it from suggestedEdits
+  - Do NOT fix things not mentioned in the comments — minimal targeted changes only
+
+Respond with ONLY valid JSON (no markdown fences):
+{
+  "suggestedEdits": [
+    {
+      "path": "<relative file path>",
+      "rationale": "<one sentence: which comment this fixes and how>",
+      "unifiedDiff": "<valid unified diff that applies to the current file content>"
+    }
+  ]
+}`;
+}
+
+export function buildSuggestFixesPrompt(ctx: SuggestFixesContext): string {
+  const parts: string[] = [];
+
+  parts.push(`PR Title: ${ctx.prTitle ?? "(none)"}`);
+  if (ctx.prBody?.trim()) {
+    parts.push(`\nPR Description:\n${ctx.prBody.trim()}`);
+  }
+
+  // Unified diff — gives the AI the before/after context for every changed line
+  const DIFF_BUDGET = 30_000;
+  if (ctx.diff?.trim()) {
+    const diffSlice = ctx.diff.slice(0, DIFF_BUDGET);
+    const truncated = diffSlice.length < ctx.diff.length;
+    parts.push(
+      `\n### PR Unified Diff${truncated ? " (truncated)" : ""}\n\`\`\`diff\n${diffSlice}\n\`\`\``
+    );
+  }
+
+  // Review comments
+  const commentsText = ctx.comments
+    .map((c) =>
+      `[${c.author ?? "reviewer"}${c.path ? ` on ${c.path}:${c.line ?? "?"}` : ""}]:\n${c.body}`
+    )
+    .join("\n\n---\n\n");
+  parts.push(`\n### Review Comments\n${commentsText}`);
+
+  // Current file contents (with line numbers so the diff is anchored correctly)
+  if (ctx.fileContents && Object.keys(ctx.fileContents).length > 0) {
+    parts.push(`\n### Current File Contents (line numbers are exact — use them for your diffs)`);
+    for (const [path, content] of Object.entries(ctx.fileContents)) {
+      parts.push(`\n#### ${path}\n\`\`\`\n${content}\n\`\`\``);
+    }
+  }
+
+  return parts.join("\n");
+}
+
+export function parseSuggestFixesResponse(raw: string): SuggestFixesResponse {
+  try {
+    const parsed = JSON.parse(raw) as Partial<SuggestFixesResponse>;
+    return {
+      suggestedEdits: Array.isArray(parsed.suggestedEdits)
+        ? parsed.suggestedEdits.filter(
+            (e) => typeof e?.path === "string" && typeof e?.unifiedDiff === "string"
+          )
+        : [],
+    };
+  } catch {
+    return { suggestedEdits: [] };
+  }
+}
