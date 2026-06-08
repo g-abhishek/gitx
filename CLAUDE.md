@@ -40,6 +40,7 @@ src/
 │           ├── create.ts        gitx pr create — AI PR creation
 │           ├── resolve.ts       gitx pr resolve — AI-fix review comments in code
 │           ├── cherryPick.ts    gitx pr cherry-pick — pull PR commits into current branch
+│           ├── port.ts          gitx pr port — port PR commits onto multiple target branches + open PRs
 │           ├── list.ts          gitx pr list
 │           ├── merge.ts         gitx pr merge
 │           └── review.ts        gitx pr review — senior-dev AI review

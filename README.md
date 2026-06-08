@@ -24,6 +24,7 @@ gitx wraps your everyday git operations with AI to generate commit messages, wri
   - [gitx pr list](#gitx-pr-list)
   - [gitx pr close](#gitx-pr-close)
   - [gitx pr cherry-pick](#gitx-pr-cherry-pick)
+  - [gitx pr port](#gitx-pr-port)
   - [gitx config](#gitx-config)
 - [Supported Providers](#supported-providers)
 - [Environment Variables](#environment-variables)
@@ -42,6 +43,7 @@ gitx wraps your everyday git operations with AI to generate commit messages, wri
 | **AI task implementation** | Takes a plain-English task, plans and applies diffs, commits, pushes, opens PR |
 | **gitx ask** | Ask anything about your repo — get answers grounded in live git context |
 | **PR cherry-pick** | Pull all commits from any PR into your current branch in one command (`gitx pr cherry-pick`) |
+| **PR port** | Port a PR's commits onto multiple target branches and open PRs in one command (`gitx pr port`) |
 
 ---
 
@@ -367,6 +369,36 @@ gitx pr cherry-pick 42 --no-confirm        # skip confirmation prompt
 5. Leaves you ready to review and push: `gitx push`
 
 **Difference from `gitx port`:** `gitx port` moves commits *from* your branch *to* other branches. `gitx pr cherry-pick` pulls commits *from* a PR *into* your current branch.
+
+---
+
+### gitx pr port
+
+Port all commits from a PR onto one or more target branches and open PRs — without touching your current working branch.
+
+```bash
+gitx pr port <number> <target1> [target2...]
+
+# Examples:
+gitx pr port 12345 release/v1 release/v2
+gitx pr port 12345 hotfix/v1 --draft          # create PRs as drafts
+gitx pr port 12345 release/v1 --no-pr         # push branch only, skip PR creation
+gitx pr port 12345 release/v1 --dry-run       # preview commits without changes
+gitx pr port 12345 release/v1 --no-confirm    # skip per-target confirmation
+```
+
+**What it does per target branch:**
+1. Verifies the target branch exists on origin
+2. Creates `port/pr-<number>-to-<target>` from `origin/<target>`
+3. Cherry-picks all PR commits (oldest → newest) with `-x` flag
+4. AI resolves conflicts automatically where possible
+5. Pushes the port branch
+6. Opens a PR: `port/pr-<number>-to-<target>` → `<target>`
+7. Prints the PR URL
+
+**Summary at the end** shows URLs for all created PRs, any branches pushed without PRs, and any targets skipped due to unresolvable conflicts.
+
+**Difference from `gitx port`:** `gitx port` ports commits *from your current branch* to other branches. `gitx pr port` ports commits *from a specific PR* (by number) to any targets — your working branch is never touched.
 
 ---
 

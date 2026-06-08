@@ -516,6 +516,7 @@ const GITX_COMMAND_REFERENCE = `
 | gitx pr merge <number> [--strategy squash|merge|rebase] [--delete-branch] | Merge a PR |
 | gitx pr close <number> [-f] | Close a PR |
 | gitx pr cherry-pick <number> [--dry-run] [--no-confirm] | Cherry-pick all commits from a PR into the current branch |
+| gitx pr port <number> <target1> [target2...] [--no-pr] [--draft] [--dry-run] [--no-confirm] | Port a PR's commits onto one or more target branches and open PRs (current branch untouched) |
 | gitx ask "<question>" [--pr] | Ask a question about the repo using AI + live git context |
 
 ## Supported Providers
