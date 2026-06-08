@@ -515,6 +515,7 @@ const GITX_COMMAND_REFERENCE = `
 | gitx pr resolve <number> [--no-commit] [--no-push] [--dry-run] | AI-fix review comments in code; --no-commit applies fixes without committing |
 | gitx pr merge <number> [--strategy squash|merge|rebase] [--delete-branch] | Merge a PR |
 | gitx pr close <number> [-f] | Close a PR |
+| gitx pr cherry-pick <number> [--dry-run] [--no-confirm] | Cherry-pick all commits from a PR into the current branch |
 | gitx ask "<question>" [--pr] | Ask a question about the repo using AI + live git context |
 
 ## Supported Providers

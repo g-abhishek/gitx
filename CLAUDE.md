@@ -36,12 +36,13 @@ src/
 │       ├── sync.ts          gitx sync — branch sync with AI conflict resolution
 │       └── pr/
 │           ├── index.ts     PR command dispatcher
-│           ├── close.ts     gitx pr close
-│           ├── create.ts    gitx pr create — AI PR creation
-│           ├── resolve.ts   gitx pr resolve — AI-fix review comments in code
-│           ├── list.ts      gitx pr list
-│           ├── merge.ts     gitx pr merge
-│           └── review.ts    gitx pr review — senior-dev AI review
+│           ├── close.ts         gitx pr close
+│           ├── create.ts        gitx pr create — AI PR creation
+│           ├── resolve.ts       gitx pr resolve — AI-fix review comments in code
+│           ├── cherryPick.ts    gitx pr cherry-pick — pull PR commits into current branch
+│           ├── list.ts          gitx pr list
+│           ├── merge.ts         gitx pr merge
+│           └── review.ts        gitx pr review — senior-dev AI review
 │
 ├── workflows/
 │   ├── implement.ts         Full task implementation orchestration

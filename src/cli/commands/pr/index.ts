@@ -3,6 +3,7 @@ import { registerPrListCommand } from "./list.js";
 import { registerPrCreateCommand } from "./create.js";
 import { registerPrReviewCommand } from "./review.js";
 import { registerPrResolveCommand } from "./resolve.js";
+import { registerPrCherryPickCommand } from "./cherryPick.js";
 import { registerPrCloseCommand } from "./close.js";
 import { registerPrMergeCommand } from "./merge.js";
 
@@ -14,5 +15,6 @@ export function registerPrCommands(program: Command): void {
   registerPrMergeCommand(pr);
   registerPrReviewCommand(pr);
   registerPrResolveCommand(pr);
+  registerPrCherryPickCommand(pr);
   registerPrCloseCommand(pr);
 }

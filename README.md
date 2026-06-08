@@ -23,6 +23,7 @@ gitx wraps your everyday git operations with AI to generate commit messages, wri
   - [gitx pr merge](#gitx-pr-merge)
   - [gitx pr list](#gitx-pr-list)
   - [gitx pr close](#gitx-pr-close)
+  - [gitx pr cherry-pick](#gitx-pr-cherry-pick)
   - [gitx config](#gitx-config)
 - [Supported Providers](#supported-providers)
 - [Environment Variables](#environment-variables)
@@ -40,6 +41,7 @@ gitx wraps your everyday git operations with AI to generate commit messages, wri
 | **AI conflict resolution** | Tries to auto-resolve merge/rebase conflicts; prompts when unsure |
 | **AI task implementation** | Takes a plain-English task, plans and applies diffs, commits, pushes, opens PR |
 | **gitx ask** | Ask anything about your repo — get answers grounded in live git context |
+| **PR cherry-pick** | Pull all commits from any PR into your current branch in one command (`gitx pr cherry-pick`) |
 
 ---
 
@@ -342,6 +344,29 @@ Close (or abandon on Azure DevOps) a pull request.
 gitx pr close <number>
 gitx pr close 42 --force    # skip confirmation prompt
 ```
+
+---
+
+### gitx pr cherry-pick
+
+Cherry-pick all commits from a PR into the current branch.
+
+Useful when you want to pull someone else's PR work (or a PR targeting a different branch) directly onto your own branch — without merging or waiting for the PR to land.
+
+```bash
+gitx pr cherry-pick <number>               # cherry-pick all commits of a PR
+gitx pr cherry-pick 42 --dry-run           # list commits without applying
+gitx pr cherry-pick 42 --no-confirm        # skip confirmation prompt
+```
+
+**What it does:**
+1. Fetches the PR's source branch from origin
+2. Lists all commits between the PR's base and head (oldest → newest)
+3. Cherry-picks them onto your current branch with `-x` (records original SHA)
+4. On conflicts: AI attempts resolution — high-confidence fixes are applied automatically; low-confidence ones show a preview and ask for your approval
+5. Leaves you ready to review and push: `gitx push`
+
+**Difference from `gitx port`:** `gitx port` moves commits *from* your branch *to* other branches. `gitx pr cherry-pick` pulls commits *from* a PR *into* your current branch.
 
 ---
 
