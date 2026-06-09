@@ -93,6 +93,11 @@ export class AzureProvider implements GitProvider {
     return { "api-version": "7.1-preview.1", ...extra };
   }
 
+  /** Build the human-readable browser URL for a PR. */
+  private prWebUrl(prId: number): string {
+    return `https://dev.azure.com/${this.org}/${this.project}/_git/${this.repoName}/pullrequest/${prId}`;
+  }
+
   async listPRs(_repoSlug: string): Promise<PullRequest[]> {
     try {
       const { data } = await this.http.get<AzListResponse<AzPr>>(
@@ -101,7 +106,7 @@ export class AzureProvider implements GitProvider {
           params: this.apiParams({ "searchCriteria.status": "active", $top: "50" }),
         }
       );
-      return (data.value ?? []).map(mapAzPr);
+      return (data.value ?? []).map((d) => mapAzPr(d, this.prWebUrl(d.pullRequestId)));
     } catch (err) {
       throw wrapAzError(err, "list PRs");
     }
@@ -113,7 +118,7 @@ export class AzureProvider implements GitProvider {
         `/git/repositories/${this.repoName}/pullrequests/${prNumber}`,
         { params: this.apiParams() }
       );
-      return mapAzPr(data);
+      return mapAzPr(data, this.prWebUrl(prNumber));
     } catch (err) {
       throw wrapAzError(err, `get PR #${prNumber}`);
     }
@@ -132,7 +137,7 @@ export class AzureProvider implements GitProvider {
         },
         { params: this.apiParams() }
       );
-      return mapAzPr(data);
+      return mapAzPr(data, this.prWebUrl(data.pullRequestId));
     } catch (err) {
       throw wrapAzError(err, "create PR");
     }
@@ -325,7 +330,7 @@ export class AzureProvider implements GitProvider {
 }
 
 // ─── Mappers ──────────────────────────────────────────────────────────────────
-function mapAzPr(d: AzPr): PullRequest {
+function mapAzPr(d: AzPr, webUrl: string): PullRequest {
   let state: "open" | "closed" | "merged";
   if (d.status === "completed") state = "merged";
   else if (d.status === "active") state = "open";
@@ -339,7 +344,7 @@ function mapAzPr(d: AzPr): PullRequest {
     state,
     head: (d.sourceRefName ?? "").replace("refs/heads/", ""),
     base: (d.targetRefName ?? "").replace("refs/heads/", ""),
-    url: d.url ?? "",
+    url: webUrl,
     author: d.createdBy?.displayName ?? "unknown",
     createdAt: d.creationDate ?? "",
     updatedAt: d.lastMergeSourceCommit?.author?.date ?? d.creationDate ?? "",
