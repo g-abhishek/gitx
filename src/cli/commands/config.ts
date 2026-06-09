@@ -426,7 +426,7 @@ async function setAiProvider(aiProvider: AiProviderKey, keyArg?: string): Promis
   const path = await saveConfig(updated);
   spinner.succeed(`Saved to ${path}`);
   logger.success(`✅ ${aiProvider} configured and set as default AI provider.`);
-  logger.info("   Note: ANTHROPIC_API_KEY env var always overrides stored keys.");
+  logger.info("   Your configured provider takes priority over any AI-related environment variables.");
 }
 
 // ─── Set Jira config ──────────────────────────────────────────────────────────

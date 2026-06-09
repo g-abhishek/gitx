@@ -46,78 +46,79 @@ import type { GitxConfig } from "../../types/config.js";
  * snapshot of which AI provider is active — WITHOUT exposing actual key values.
  */
 function buildAiSetupStatus(config: GitxConfig): AiSetupStatus {
-  // 1. ANTHROPIC_API_KEY env var (highest priority)
-  if (process.env["ANTHROPIC_API_KEY"]) {
-    const model = process.env["GITX_AI_MODEL"] ?? config.aiProviders?.claude?.model ?? "claude-3-5-haiku-20241022";
-    return {
-      provider: "claude (Anthropic API)",
-      model,
-      keySource: "ANTHROPIC_API_KEY env var",
-      isConfigured: true,
-    };
-  }
+  // Mirrors the priority order of Gitx.buildAi():
+  //   1. defaultAiProvider in config  — explicit user choice always wins
+  //   2. Any configured aiProviders entry
+  //   3. ANTHROPIC_API_KEY env var    — env vars only as a last resort
+  //   4. OPENAI_API_KEY env var
+  //   5. Nothing configured
 
-  // 2. OPENAI_API_KEY env var
-  if (process.env["OPENAI_API_KEY"]) {
-    const model = process.env["GITX_AI_MODEL"] ?? config.aiProviders?.openai?.model ?? "gpt-4o";
-    return {
-      provider: "openai",
-      model,
-      keySource: "OPENAI_API_KEY env var",
-      isConfigured: true,
-    };
-  }
-
-  // 3. defaultAiProvider in config
+  // 1. Explicit default provider from config
   const defaultProv = config.defaultAiProvider;
   if (defaultProv) {
     const entry = config.aiProviders?.[defaultProv];
     if (defaultProv === "claude-cli") {
       return {
         provider: "claude-cli (local)",
-        keySource: "local CLI",
+        keySource: "config file (default)",
         isConfigured: true,
       };
     }
     if (entry?.apiKey) {
-      const model = process.env["GITX_AI_MODEL"] ?? entry.model ?? (defaultProv === "claude" ? "claude-3-5-haiku-20241022" : "gpt-4o");
+      const model = entry.model ?? (defaultProv === "claude" ? "claude-3-5-haiku-20241022" : "gpt-4o");
       return {
         provider: defaultProv === "claude" ? "claude (Anthropic API)" : defaultProv,
         model,
-        keySource: "config file",
+        keySource: "config file (default)",
         isConfigured: true,
       };
     }
-    // defaultAiProvider set but key is missing
     return {
       provider: `${defaultProv} (key missing)`,
-      keySource: "config file (key missing — needs to be set)",
+      keySource: "config file (key missing — run: gitx config setup)",
       isConfigured: false,
     };
   }
 
-  // 4. Scan all aiProviders entries
+  // 2. Any other configured aiProviders entry
   const entries = Object.entries(config.aiProviders ?? {}) as Array<[string, { apiKey?: string; model?: string }]>;
   for (const [kind, entry] of entries) {
     if (kind === "claude-cli") {
-      return {
-        provider: "claude-cli (local)",
-        keySource: "config file",
-        isConfigured: true,
-      };
+      return { provider: "claude-cli (local)", keySource: "config file", isConfigured: true };
     }
     if (entry?.apiKey) {
-      const model = process.env["GITX_AI_MODEL"] ?? entry.model;
       return {
         provider: kind === "claude" ? "claude (Anthropic API)" : kind,
-        model,
+        model: entry.model,
         keySource: "config file",
         isConfigured: true,
       };
     }
   }
 
-  // 5. No provider found
+  // 3. ANTHROPIC_API_KEY env var — fallback when nothing is configured
+  if (process.env["ANTHROPIC_API_KEY"]) {
+    const model = config.aiProviders?.claude?.model ?? "claude-3-5-haiku-20241022";
+    return {
+      provider: "claude (Anthropic API)",
+      model,
+      keySource: "ANTHROPIC_API_KEY env var (no config set — run: gitx config setup)",
+      isConfigured: true,
+    };
+  }
+
+  // 4. OPENAI_API_KEY env var — fallback when nothing is configured
+  if (process.env["OPENAI_API_KEY"]) {
+    const model = config.aiProviders?.openai?.model ?? "gpt-4o";
+    return {
+      provider: "openai",
+      model,
+      keySource: "OPENAI_API_KEY env var (no config set — run: gitx config setup)",
+      isConfigured: true,
+    };
+  }
+
+  // 5. Nothing found
   return {
     provider: "none (not configured)",
     keySource: "none",

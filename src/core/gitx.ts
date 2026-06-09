@@ -68,24 +68,19 @@ export class Gitx {
    * Build the best available AiClient for the given config.
    *
    * Selection cascade:
-   *  1. ANTHROPIC_API_KEY env var         → ClaudeAi (remote API)
-   *  2. defaultAiProvider in config       → use that specific provider
-   *  3. Any configured aiProviders entry  → first one found with a key
-   *  4. Auto-detect local `claude` CLI    → ClaudeCliAi (free, no key)
-   *  5. MockAi fallback                   → placeholders, warns user
+   *  1. defaultAiProvider in config       → explicit user choice always wins
+   *  2. Any configured aiProviders entry  → first one found that works
+   *  3. ANTHROPIC_API_KEY env var         → ClaudeAi (remote API)
+   *  4. OPENAI_API_KEY env var            → OpenAiAi
+   *  5. Auto-detect local `claude` CLI    → ClaudeCliAi (free, no key)
+   *  6. MockAi fallback                   → placeholders, warns user
+   *
+   * Env vars (steps 3–4) intentionally come AFTER explicit config so that
+   * a user who configured "claude-cli" isn't silently overridden by an
+   * OPENAI_API_KEY that happens to be set in their shell environment.
    */
   static async buildAi(config: GitxConfig): Promise<AiClient> {
-    // 1. Env vars always win (Anthropic takes precedence over OpenAI)
-    const envClaudeKey = process.env["ANTHROPIC_API_KEY"];
-    if (envClaudeKey) {
-      return new ClaudeAi(envClaudeKey, config.aiProviders?.claude?.model);
-    }
-    const envOpenAiKey = process.env["OPENAI_API_KEY"];
-    if (envOpenAiKey) {
-      return new OpenAiAi(envOpenAiKey, config.aiProviders?.openai?.model);
-    }
-
-    // 2. Use the configured default provider
+    // 1. Explicit default provider — respects the user's deliberate choice
     const defaultProv = config.defaultAiProvider;
     if (defaultProv) {
       const result = await Gitx._buildForProvider(defaultProv, config);
@@ -94,7 +89,7 @@ export class Gitx {
       logger.warn(`⚠️  Default AI provider "${defaultProv}" is not available. Falling back…`);
     }
 
-    // 3. Scan all configured aiProviders for one that works
+    // 2. Scan all configured aiProviders for one that works
     const allEntries = Object.entries(config.aiProviders ?? {}) as Array<
       [AiProviderKind, { apiKey?: string; model?: string }]
     >;
@@ -102,6 +97,16 @@ export class Gitx {
       if (kind === defaultProv) continue; // already tried above
       const result = await Gitx._buildForProvider(kind, config, entry);
       if (result) return result;
+    }
+
+    // 3. Env vars — only reached when nothing is explicitly configured
+    const envClaudeKey = process.env["ANTHROPIC_API_KEY"];
+    if (envClaudeKey) {
+      return new ClaudeAi(envClaudeKey, config.aiProviders?.claude?.model);
+    }
+    const envOpenAiKey = process.env["OPENAI_API_KEY"];
+    if (envOpenAiKey) {
+      return new OpenAiAi(envOpenAiKey, config.aiProviders?.openai?.model);
     }
 
     // 4. Auto-detect locally installed claude CLI (no key needed)
