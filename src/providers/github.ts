@@ -58,12 +58,28 @@ export class GitHubProvider implements GitProvider {
     });
   }
 
-  async listPRs(repoSlug: string): Promise<PullRequest[]> {
+  async listPRs(repoSlug: string, opts?: import("./base.js").ListPRsOptions): Promise<PullRequest[]> {
     try {
-      const { data } = await withRetry(() => this.http.get<GhPr[]>(`/repos/${repoSlug}/pulls`, {
-        params: { state: "open", per_page: 50 },
-      }));
-      return data.map(mapGhPr);
+      if (!opts?.fetchAll) {
+        const { data } = await withRetry(() => this.http.get<GhPr[]>(`/repos/${repoSlug}/pulls`, {
+          params: { state: "open", per_page: 50 },
+        }));
+        return data.map(mapGhPr);
+      }
+
+      // Paginate through all pages (max 100 per page)
+      const all: PullRequest[] = [];
+      let page = 1;
+      while (true) {
+        const { data } = await withRetry(() => this.http.get<GhPr[]>(`/repos/${repoSlug}/pulls`, {
+          params: { state: "open", per_page: 100, page },
+        }));
+        if (data.length === 0) break;
+        all.push(...data.map(mapGhPr));
+        if (data.length < 100) break; // last page
+        page++;
+      }
+      return all;
     } catch (err) {
       throw wrapGhError(err, "list PRs");
     }
@@ -273,6 +289,17 @@ export class GitHubProvider implements GitProvider {
       // Fallback: post as a plain issue comment if the thread reply fails
       await this.http.post(`/repos/${repoSlug}/issues/${prNumber}/comments`, { body })
         .catch((e: unknown) => { throw wrapGhError(e, `reply to comment #${commentId}`); });
+    }
+  }
+
+  async getCurrentUser(): Promise<string> {
+    try {
+      // GitHub PR authors are stored as login (username). Return "Name (login)"
+      // so the AI can match on either the display name or the username.
+      const { data } = await this.http.get<{ login: string; name?: string | null }>("/user");
+      return data.name ? `${data.name} (${data.login})` : data.login;
+    } catch {
+      return "";
     }
   }
 

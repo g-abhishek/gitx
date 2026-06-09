@@ -465,3 +465,16 @@ export async function getStashList(cwd = process.cwd()): Promise<string[]> {
     return [];
   }
 }
+
+/**
+ * Read the current git user's name and email from git config.
+ * Used by `gitx pr list --prompt` to resolve "me" / "my" in natural-language filters.
+ * Falls back to empty strings if git config is not set.
+ */
+export async function getGitUser(cwd = process.cwd()): Promise<{ name: string; email: string }> {
+  const [name, email] = await Promise.all([
+    git(["config", "user.name"], cwd).catch(() => ""),
+    git(["config", "user.email"], cwd).catch(() => ""),
+  ]);
+  return { name: name.trim(), email: email.trim() };
+}

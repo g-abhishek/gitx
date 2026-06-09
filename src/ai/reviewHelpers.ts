@@ -680,6 +680,68 @@ export function parseAskResponse(raw: string): AiAskResponse {
   }
 }
 
+// ─── PR filter helpers (used by gitx pr list --prompt) ───────────────────────
+
+export interface FilterPRsInput {
+  prs: Array<{ number: number; title: string; author: string; head: string; base: string; state: string; updatedAt: string }>;
+  prompt: string;
+  currentUser: { name: string; email: string };
+}
+
+export function buildFilterPRsSystem(): string {
+  return `You are a smart PR filter assistant. You receive a list of pull requests and a natural-language query. Your job is to return which PR numbers match the query.
+
+Rules:
+- "me" / "my" / "I" → match against the currentUser name and email provided
+- Partial names (e.g. "amar") → fuzzy-match against the actual author names in the PR list (case-insensitive substring match)
+- Branch filters (e.g. "to release/v2") → match the base branch
+- Source branch filters (e.g. "from feature/x") → match the head branch
+- If the query mentions a title keyword → match against the title (case-insensitive)
+- If no PRs match, return matchedIds: []
+- Never fabricate PR numbers — only return numbers from the input list
+
+Respond with ONLY valid JSON (no markdown fences):
+{"matchedIds":[<pr numbers>],"explanation":"<one sentence: what you matched and why>"}`;
+}
+
+export function buildFilterPRsPrompt(input: FilterPRsInput): string {
+  const prLines = input.prs
+    .map((p) =>
+      `#${p.number} | title: "${p.title}" | author: "${p.author}" | ${p.head} → ${p.base} | state: ${p.state} | updated: ${p.updatedAt}`
+    )
+    .join("\n");
+
+  // currentUser.name is the provider display name — the exact string that
+  // appears in PR author fields (e.g. "Abhishek Gupta" on Azure).
+  const userLabel = input.currentUser.name || "(unknown user)";
+
+  return `Current user (as it appears in PR author field): ${userLabel}
+
+Pull requests:
+${prLines}
+
+Query: ${input.prompt}`;
+}
+
+export function parseFilterPRsResponse(raw: string): import("./types.js").AiFilterPRsResponse {
+  try {
+    const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+    const candidate = fenced?.[1]?.trim() ?? raw.trim();
+    const start = candidate.search(/\{/);
+    const end = candidate.lastIndexOf("}");
+    if (start === -1 || end <= start) throw new Error("no JSON");
+    const parsed = JSON.parse(candidate.slice(start, end + 1)) as Partial<import("./types.js").AiFilterPRsResponse>;
+    return {
+      matchedIds: Array.isArray(parsed.matchedIds)
+        ? parsed.matchedIds.filter((id): id is number => typeof id === "number")
+        : [],
+      explanation: parsed.explanation?.trim() ?? "Filtered by AI.",
+    };
+  } catch {
+    return { matchedIds: [], explanation: "Could not parse AI filter response." };
+  }
+}
+
 // ─── suggestFixes helpers (used by gitx pr resolve) ──────────────────────────
 
 export interface SuggestFixesContext {

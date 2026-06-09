@@ -147,6 +147,18 @@ export interface AiAskContext {
   defaultBranch?: string;
 }
 
+/**
+ * Result of a natural-language PR filter.
+ * The AI returns which PR numbers match the prompt and a brief explanation
+ * of how it interpreted the query (e.g. "matched author 'Amar Sharma' for 'amar'").
+ */
+export interface AiFilterPRsResponse {
+  /** PR numbers that match the prompt (subset of the input list). */
+  matchedIds: number[];
+  /** One-sentence human-readable explanation of what was matched and why. */
+  explanation: string;
+}
+
 /** Response returned by `AiClient.ask()` for the `gitx ask` command. */
 export interface AiAskResponse {
   /** Full answer in plain text or markdown */
@@ -206,6 +218,23 @@ export interface AiClient {
    * @param context   Live repo state gathered by the ask command.
    */
   ask(question: string, context: AiAskContext): Promise<AiAskResponse>;
+
+  /**
+   * Filter a list of PRs using a natural-language prompt.
+   * Used by `gitx pr list --prompt "..."`.
+   *
+   * The AI receives the full PR list + the current git user identity so it can
+   * resolve pronouns like "me" and fuzzy-match partial names like "amar".
+   *
+   * @param prs         Full list of PRs already fetched from the provider.
+   * @param prompt      Natural-language filter (e.g. "show PRs created by me").
+   * @param currentUser Git user identity from `git config` (for resolving "me").
+   */
+  filterPRs(
+    prs: Array<{ number: number; title: string; author: string; head: string; base: string; state: string; updatedAt: string }>,
+    prompt: string,
+    currentUser: { name: string; email: string },
+  ): Promise<AiFilterPRsResponse>;
 
   /**
    * Senior-developer quality PR review with full codebase context.

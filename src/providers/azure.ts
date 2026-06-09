@@ -98,15 +98,37 @@ export class AzureProvider implements GitProvider {
     return `https://dev.azure.com/${this.org}/${this.project}/_git/${this.repoName}/pullrequest/${prId}`;
   }
 
-  async listPRs(_repoSlug: string): Promise<PullRequest[]> {
+  async listPRs(_repoSlug: string, opts?: import("./base.js").ListPRsOptions): Promise<PullRequest[]> {
     try {
-      const { data } = await this.http.get<AzListResponse<AzPr>>(
-        `/git/repositories/${this.repoName}/pullrequests`,
-        {
-          params: this.apiParams({ "searchCriteria.status": "active", $top: "50" }),
-        }
-      );
-      return (data.value ?? []).map((d) => mapAzPr(d, this.prWebUrl(d.pullRequestId)));
+      if (!opts?.fetchAll) {
+        const { data } = await this.http.get<AzListResponse<AzPr>>(
+          `/git/repositories/${this.repoName}/pullrequests`,
+          { params: this.apiParams({ "searchCriteria.status": "active", $top: "50" }) }
+        );
+        return (data.value ?? []).map((d) => mapAzPr(d, this.prWebUrl(d.pullRequestId)));
+      }
+
+      // Paginate using $skip (Azure max $top is 1000 per page)
+      const PAGE_SIZE = 100;
+      const all: AzPr[] = [];
+      let skip = 0;
+      while (true) {
+        const { data } = await this.http.get<AzListResponse<AzPr>>(
+          `/git/repositories/${this.repoName}/pullrequests`,
+          {
+            params: this.apiParams({
+              "searchCriteria.status": "active",
+              $top: String(PAGE_SIZE),
+              $skip: String(skip),
+            }),
+          }
+        );
+        const page = data.value ?? [];
+        all.push(...page);
+        if (page.length < PAGE_SIZE) break; // last page
+        skip += PAGE_SIZE;
+      }
+      return all.map((d) => mapAzPr(d, this.prWebUrl(d.pullRequestId)));
     } catch (err) {
       throw wrapAzError(err, "list PRs");
     }
@@ -313,6 +335,20 @@ export class AzureProvider implements GitProvider {
       );
     } catch (err) {
       throw wrapAzError(err, `reply to comment #${commentId}`);
+    }
+  }
+
+  async getCurrentUser(): Promise<string> {
+    try {
+      // connectionData returns the authenticated identity — displayName matches
+      // the createdBy.displayName field on every PR created by this user.
+      const { data } = await this.http.get<{ authenticatedUser?: { providerDisplayName?: string } }>(
+        "/_apis/connectionData",
+        { params: { "api-version": "7.1-preview.1" }, baseURL: `https://dev.azure.com/${this.org}` }
+      );
+      return data.authenticatedUser?.providerDisplayName ?? "";
+    } catch {
+      return "";
     }
   }
 

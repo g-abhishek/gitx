@@ -57,13 +57,30 @@ export class GitLabProvider implements GitProvider {
     return encodeURIComponent(slug);
   }
 
-  async listPRs(repoSlug: string): Promise<PullRequest[]> {
+  async listPRs(repoSlug: string, opts?: import("./base.js").ListPRsOptions): Promise<PullRequest[]> {
     try {
-      const { data } = await withRetry(() => this.http.get<GlMr[]>(
-        `/projects/${this.enc(repoSlug)}/merge_requests`,
-        { params: { state: "opened", per_page: 50 } }
-      ));
-      return data.map(mapGlMr);
+      if (!opts?.fetchAll) {
+        const { data } = await withRetry(() => this.http.get<GlMr[]>(
+          `/projects/${this.enc(repoSlug)}/merge_requests`,
+          { params: { state: "opened", per_page: 50 } }
+        ));
+        return data.map(mapGlMr);
+      }
+
+      // Paginate through all pages (max 100 per page)
+      const all: PullRequest[] = [];
+      let page = 1;
+      while (true) {
+        const { data } = await withRetry(() => this.http.get<GlMr[]>(
+          `/projects/${this.enc(repoSlug)}/merge_requests`,
+          { params: { state: "opened", per_page: 100, page } }
+        ));
+        if (data.length === 0) break;
+        all.push(...data.map(mapGlMr));
+        if (data.length < 100) break; // last page
+        page++;
+      }
+      return all;
     } catch (err) {
       throw wrapGlError(err, "list MRs");
     }
@@ -205,6 +222,17 @@ export class GitLabProvider implements GitProvider {
       );
     } catch (err) {
       throw wrapGlError(err, `reply to comment #${commentId}`);
+    }
+  }
+
+  async getCurrentUser(): Promise<string> {
+    try {
+      // GitLab PR authors are stored as username. Return "Name (username)"
+      // so the AI can match on either form.
+      const { data } = await this.http.get<{ username: string; name?: string }>("/user");
+      return data.name ? `${data.name} (${data.username})` : data.username;
+    } catch {
+      return "";
     }
   }
 

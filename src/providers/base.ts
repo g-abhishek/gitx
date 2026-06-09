@@ -76,9 +76,20 @@ export interface MergePrOptions {
   deleteSourceBranch?: boolean;
 }
 
+export interface ListPRsOptions {
+  /**
+   * When true, paginate through ALL pages until every PR is fetched.
+   * Use this for AI-powered filtering (gitx pr list --prompt) where missing
+   * a PR because of a page limit would silently produce wrong results.
+   *
+   * Default: false — returns only the first page (~50 PRs) for fast display.
+   */
+  fetchAll?: boolean;
+}
+
 export interface GitProvider {
   /** List open pull requests for the repo */
-  listPRs(repoSlug: string): Promise<PullRequest[]>;
+  listPRs(repoSlug: string, opts?: ListPRsOptions): Promise<PullRequest[]>;
 
   /** Get a single pull request by its number */
   getPR(repoSlug: string, prNumber: number): Promise<PullRequest>;
@@ -120,4 +131,17 @@ export interface GitProvider {
    * Falls back to a general PR comment if thread replies aren't supported.
    */
   replyToComment(repoSlug: string, prNumber: number, commentId: number, body: string): Promise<void>;
+
+  /**
+   * Return the display name of the currently authenticated user — exactly as
+   * it appears in the `author` field of PRs created by that user.
+   *
+   * Used by `gitx pr list --prompt` to resolve "me" / "my" reliably.
+   * Returns an empty string if the provider cannot determine the current user.
+   *
+   * - Azure  → `displayName` from connection data (matches `createdBy.displayName`)
+   * - GitHub → `name` field from GET /user (matches `user.login` fallback)
+   * - GitLab → `name` field from GET /user (matches `author.username` fallback)
+   */
+  getCurrentUser(): Promise<string>;
 }

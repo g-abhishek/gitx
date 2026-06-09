@@ -120,4 +120,16 @@ export class MockAi implements AiClient {
       suggestedCommands: ["gitx config setup"],
     };
   }
+
+  async filterPRs(
+    prs: Parameters<import("./types.js").AiClient["filterPRs"]>[0],
+    _prompt: string,
+    _currentUser: { name: string; email: string }
+  ): Promise<import("./types.js").AiFilterPRsResponse> {
+    // No AI — return all PRs unfiltered with a warning
+    return {
+      matchedIds: prs.map((p) => p.number),
+      explanation: "AI not configured — showing all PRs unfiltered. Run `gitx config setup` to enable prompt filtering.",
+    };
+  }
 }

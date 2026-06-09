@@ -377,4 +377,14 @@ Respond with ONLY valid JSON (no markdown fences):
     const text = await callClaudeCli(buildAskSystem(), buildAskPrompt(question, context));
     return parseAskResponse(text);
   }
+
+  async filterPRs(
+    prs: Parameters<import("./types.js").AiClient["filterPRs"]>[0],
+    prompt: string,
+    currentUser: { name: string; email: string }
+  ): Promise<import("./types.js").AiFilterPRsResponse> {
+    const { buildFilterPRsSystem, buildFilterPRsPrompt, parseFilterPRsResponse } = await import("./reviewHelpers.js");
+    const text = await callClaudeCli(buildFilterPRsSystem(), buildFilterPRsPrompt({ prs, prompt, currentUser }));
+    return parseFilterPRsResponse(text);
+  }
 }
