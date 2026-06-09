@@ -274,64 +274,84 @@ export function registerPrCherryPickCommand(pr: Command): void {
         return;
       }
 
-      // ── Fetch the PR head branch from origin ─────────────────────────────────
-      const fetchSpinner = ora(`Fetching origin/${pr.head}…`).start();
-      const fetchResult = await git(["fetch", "origin", pr.head], cwd);
-      if (fetchResult.exitCode !== 0 && !fetchResult.stderr.includes("->")) {
-        // If the head branch no longer exists (merged/deleted), try fetching by ref
-        // For GitHub PRs: refs/pull/<number>/head
-        const refResult = await git(
-          ["fetch", "origin", `refs/pull/${prNumber}/head:refs/remotes/origin/pr/${prNumber}`],
+      // ── Collect commits from the PR ──────────────────────────────────────────
+      //
+      // Same 3-strategy cascade as `gitx pr port`:
+      //   1. git log origin/<base>..origin/<head>  — fastest, works for open PRs
+      //   2. Provider git ref (refs/pull/<id>/head or refs/merge-requests/<id>/head)
+      //   3. provider.getPRCommits() REST API  — always works for merged PRs
+
+      let commits: Array<{ sha: string; subject: string }> = [];
+
+      const fetchSpinner = ora(`Fetching commits for PR #${prNumber}…`).start();
+
+      // Strategy 1: source branch still alive
+      const branchFetch = await git(["fetch", "origin", pr.head], cwd);
+      if (branchFetch.exitCode === 0) {
+        const logResult = await git(
+          ["log", "--format=%H %s", `origin/${pr.base}..origin/${pr.head}`],
           cwd
         );
-        if (refResult.exitCode !== 0) {
-          fetchSpinner.warn(`Could not fetch branch "${pr.head}" — it may have been deleted after merge.`);
-          // Continue with whatever we have locally
-        } else {
-          fetchSpinner.succeed(`Fetched PR #${prNumber} via refs/pull/${prNumber}/head`);
+        if (logResult.stdout.trim()) {
+          commits = logResult.stdout
+            .split("\n").map((l) => l.trim()).filter(Boolean)
+            .map((line) => {
+              const idx = line.indexOf(" ");
+              return { sha: line.slice(0, idx), subject: line.slice(idx + 1) };
+            })
+            .reverse();
+          fetchSpinner.succeed(`Fetched ${commits.length} commit(s) from origin/${pr.head}`);
         }
-      } else {
-        fetchSpinner.succeed(`Fetched origin/${pr.head}`);
       }
 
-      // ── Collect commits: base..head (oldest first) ────────────────────────────
-      // Try origin/<head> first; fall back to the special PR ref we fetched above
-      const headRef =
-        (await git(["rev-parse", "--verify", `origin/${pr.head}`], cwd)).exitCode === 0
-          ? `origin/${pr.head}`
-          : `origin/pr/${prNumber}`;
+      // Strategy 2: provider git ref (for deleted branches)
+      if (commits.length === 0) {
+        const prRef = ctx.provider === "gitlab"
+          ? `refs/merge-requests/${prNumber}/head`
+          : `refs/pull/${prNumber}/head`;
 
-      // Base ref — what the PR targets
-      const baseRef = `origin/${pr.base}`;
-
-      const logResult = await git(
-        ["log", "--format=%H %s", `${baseRef}..${headRef}`],
-        cwd
-      );
-
-      if (logResult.exitCode !== 0 || !logResult.stdout) {
-        logger.error(`❌ No commits found between ${baseRef} and ${headRef}.`);
-        logger.info(`   Make sure the base branch (${pr.base}) exists on origin.`);
-        process.exitCode = 1;
-        return;
+        const refFetch = await git(
+          ["fetch", "origin", `${prRef}:refs/remotes/origin/pr/${prNumber}`],
+          cwd
+        );
+        if (refFetch.exitCode === 0) {
+          const logResult = await git(
+            ["log", "--format=%H %s", `origin/${pr.base}..origin/pr/${prNumber}`],
+            cwd
+          );
+          if (logResult.stdout.trim()) {
+            commits = logResult.stdout
+              .split("\n").map((l) => l.trim()).filter(Boolean)
+              .map((line) => {
+                const idx = line.indexOf(" ");
+                return { sha: line.slice(0, idx), subject: line.slice(idx + 1) };
+              })
+              .reverse();
+            fetchSpinner.succeed(`Fetched ${commits.length} commit(s) via PR ref`);
+          }
+        }
       }
 
-      // git log returns newest-first; reverse to oldest-first for cherry-pick
-      const commits = logResult.stdout
-        .split("\n")
-        .map((l) => l.trim())
-        .filter(Boolean)
-        .map((line) => {
-          const spaceIdx = line.indexOf(" ");
-          return {
-            sha: line.slice(0, spaceIdx),
-            subject: line.slice(spaceIdx + 1),
-          };
-        })
-        .reverse();
+      // Strategy 3: provider REST API — always works for merged PRs
+      if (commits.length === 0) {
+        fetchSpinner.text = `Source branch deleted — fetching commits via provider API…`;
+        try {
+          const apiCommits = await provider.getPRCommits(ctx.repoSlug, prNumber);
+          if (apiCommits.length > 0) {
+            await git(["fetch", "origin"], cwd);
+            commits = apiCommits;
+            fetchSpinner.succeed(`Fetched ${commits.length} commit(s) from provider API (branch was deleted)`);
+          }
+        } catch (apiErr) {
+          fetchSpinner.fail(`Could not retrieve commits for PR #${prNumber}: ${apiErr instanceof Error ? apiErr.message : String(apiErr)}`);
+          process.exitCode = 1;
+          return;
+        }
+      }
 
       if (commits.length === 0) {
-        logger.info(`✅ No commits to cherry-pick — PR #${prNumber} has no new commits relative to ${pr.base}.`);
+        fetchSpinner.fail(`No commits found for PR #${prNumber}.`);
+        process.exitCode = 1;
         return;
       }
 
