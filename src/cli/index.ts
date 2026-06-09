@@ -1,4 +1,5 @@
 import { Command } from "commander";
+import { createRequire } from "node:module";
 import { registerInitCommand } from "./commands/init.js";
 import { registerCommitCommand } from "./commands/commit.js";
 import { registerPushCommand } from "./commands/push.js";
@@ -11,13 +12,17 @@ import { registerPortCommand } from "./commands/port.js";
 import { logger } from "../logger/logger.js";
 import { GitxError } from "../utils/errors.js";
 
+const require = createRequire(import.meta.url);
+// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
+const pkgVersion = (require("../../package.json") as { version: string }).version;
+
 export async function runCli(argv: string[]): Promise<void> {
   const program = new Command();
 
   program
     .name("gitx")
     .description("🧠🤝 AI-powered Git workflow automation CLI")
-    .version("0.1.3");
+    .version(pkgVersion);
 
   registerInitCommand(program);
   registerCommitCommand(program);
