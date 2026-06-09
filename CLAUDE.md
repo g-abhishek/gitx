@@ -132,6 +132,7 @@ All provider operations (PRs, comments, reviews) go through this interface. Neve
 | `mergePR(repoSlug, number, strategy)` | Merge a PR |
 | `closePR(repoSlug, number)` | Close a PR |
 | `getPRDiff(repoSlug, number)` | Get the unified diff |
+| `getPRCommits(repoSlug, number)` | Get commits for a PR (works even after source branch is deleted) |
 | `getPRComments(repoSlug, number)` | Fetch review comments + fallback `📍` comments |
 | `postReview(repoSlug, number, review)` | Post formal review with inline comments |
 | `replyToComment(repoSlug, number, commentId, body)` | Reply to a thread |

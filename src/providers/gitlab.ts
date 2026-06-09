@@ -225,6 +225,18 @@ export class GitLabProvider implements GitProvider {
     }
   }
 
+  async getPRCommits(repoSlug: string, prNumber: number): Promise<Array<{ sha: string; subject: string }>> {
+    try {
+      // GitLab returns commits oldest-first by default
+      const { data } = await this.http.get<Array<{ id: string; title: string }>>(
+        `/projects/${this.enc(repoSlug)}/merge_requests/${prNumber}/commits`
+      );
+      return (data ?? []).map((c) => ({ sha: c.id, subject: c.title }));
+    } catch (err) {
+      throw wrapGlError(err, `get commits for PR #${prNumber}`);
+    }
+  }
+
   async getCurrentUser(): Promise<string> {
     try {
       // GitLab PR authors are stored as username. Return "Name (username)"

@@ -106,9 +106,12 @@ async function resolveConflictsWithAi(
         spinner.succeed(`  ✅ Auto-resolved: ${filePath} — ${result.explanation}`);
         resolved.push(filePath);
       } else {
-        spinner.warn(`  ⚠️  Low confidence: ${filePath} — ${result.explanation}`);
+        // Stop spinner before printing preview so lines don't get overwritten
+        spinner.stop();
+        logger.warn(`  ⚠️  Low confidence for ${filePath}`);
+        logger.info(`     Reason: ${result.explanation}`);
         const preview = result.resolved.split("\n").slice(0, 30).join("\n");
-        logger.info(`\n${preview}\n`);
+        logger.info(`\n--- AI proposed resolution (first 30 lines) ---\n${preview}\n---`);
 
         let apply = false;
         try {
@@ -117,6 +120,7 @@ async function resolveConflictsWithAi(
             default: true,
           });
         } catch {
+          logger.warn(`  ⚠️  Could not prompt for confirmation — skipping AI resolution for ${filePath}`);
           apply = false;
         }
 
@@ -125,11 +129,13 @@ async function resolveConflictsWithAi(
           logger.success(`  ✅ Applied: ${filePath}`);
           resolved.push(filePath);
         } else {
+          logger.info(`  ↩️  Skipped AI resolution for ${filePath} — will need manual fix`);
           needsManual.push(filePath);
         }
       }
-    } catch {
-      spinner.fail(`  ❌ AI resolution failed: ${filePath} — resolve manually`);
+    } catch (aiErr) {
+      spinner.stop();
+      logger.error(`  ❌ AI resolution failed for ${filePath}: ${aiErr instanceof Error ? aiErr.message : String(aiErr)}`);
       needsManual.push(filePath);
     }
   }
@@ -159,7 +165,8 @@ async function cherryPickCommits(
     const { sha, subject } = commits[i]!;
     const shortSha = sha.slice(0, 7);
 
-    logger.info(`\n  🍒 [${i + 1}/${commits.length}] ${shortSha} — ${subject}`);
+    logger.info(`\n  🍒 [${i + 1}/${commits.length}] Porting commit ${shortSha}`);
+    logger.info(`     Message: ${subject}`);
 
     const result = await git(["cherry-pick", "-x", sha], cwd);
 
@@ -180,11 +187,13 @@ async function cherryPickCommits(
     conflictFiles.forEach((f) => logger.info(`     • ${f}`));
 
     if (!aiAvailable) {
-      logger.error(`\n  ⛔ Manual conflict resolution needed. Aborting port to this target.`);
-      logger.info(`  Run:  git cherry-pick --abort  (if needed) then fix manually.`);
+      logger.error(`\n  ⛔ No AI configured — cannot auto-resolve conflicts. Aborting port to this target.`);
+      logger.info(`  To enable AI resolution: run \`gitx config setup\` and configure an AI provider.`);
       await git(["cherry-pick", "--abort"], cwd);
       return { status: "paused", pausedAt: commits[i] };
     }
+
+    logger.info(`\n  🤖 Attempting AI conflict resolution for ${conflictFiles.length} file(s)…`);
 
     const { resolved, needsManual } = await resolveConflictsWithAi(conflictFiles, cwd, gitx);
 
@@ -271,15 +280,6 @@ async function portPrToTarget(opts: {
     ["rev-parse", "--verify", portBranch], cwd
   )).exitCode === 0;
 
-  if (portExistsRemote || portExistsLocal) {
-    logger.warn(`  ⚠️  Port branch "${portBranch}" already exists — deleting and recreating for a clean port.`);
-    if (portExistsLocal) {
-      // Make sure we're not on it before deleting
-      await git(["checkout", originalBranch], cwd);
-      await git(["branch", "-D", portBranch], cwd);
-    }
-  }
-
   // ── 3. Confirmation ─────────────────────────────────────────────────────────
   if (!skipConfirm) {
     let proceed = false;
@@ -297,14 +297,73 @@ async function portPrToTarget(opts: {
     }
   }
 
-  // ── 4. Create port branch from origin/<target> ────────────────────────────
-  const checkoutResult = await git(
-    ["checkout", "-b", portBranch, `origin/${targetBranch}`],
-    cwd
-  );
-  if (checkoutResult.exitCode !== 0) {
-    logger.error(`  ❌ Could not create port branch: ${checkoutResult.stderr}`);
-    return { target: targetBranch, portBranch, skipped: `checkout failed: ${checkoutResult.stderr}` };
+  // ── 4. Checkout or create the port branch ────────────────────────────────
+  //
+  // If the branch already exists (e.g. from a previous failed attempt), just
+  // switch to it and continue cherry-picking from where we left off — we never
+  // reset or discard existing commits.
+  //
+  // If the target branch has moved ahead since the port branch was created, we
+  // warn the user and ask if they want to merge those changes in first. This is
+  // optional — cherry-pick works fine regardless, and the PR will be merged into
+  // the latest target anyway.
+  if (portExistsLocal) {
+    const { stdout: currentBranch } = await git(["rev-parse", "--abbrev-ref", "HEAD"], cwd);
+    if (currentBranch.trim() !== portBranch) {
+      await git(["checkout", portBranch], cwd);
+    }
+
+    // Count commits on target that are NOT on the port branch
+    const { stdout: behindOut } = await git(
+      ["rev-list", "--count", `${portBranch}..origin/${targetBranch}`],
+      cwd
+    );
+    const behindCount = parseInt(behindOut.trim(), 10) || 0;
+
+    if (behindCount > 0) {
+      logger.warn(`  ⚠️  origin/${targetBranch} has ${behindCount} new commit(s) since this port branch was created.`);
+      logger.info(`     You can either:`);
+      logger.info(`       • Continue as-is — cherry-picks apply on top of your current port branch`);
+      logger.info(`       • Sync first — merge origin/${targetBranch} into your port branch, then retry`);
+
+      let syncFirst = false;
+      try {
+        syncFirst = await confirm({
+          message: `Merge latest origin/${targetBranch} into ${portBranch} before continuing?`,
+          default: false,
+        });
+      } catch { syncFirst = false; }
+
+      if (syncFirst) {
+        const mergeResult = await git(["merge", `origin/${targetBranch}`, "--no-edit"], cwd);
+        if (mergeResult.exitCode !== 0) {
+          logger.error(`  ❌ Merge failed — resolve conflicts manually then re-run gitx pr port.`);
+          return { target: targetBranch, portBranch, skipped: `merge of origin/${targetBranch} failed` };
+        }
+        logger.success(`  ✅ Merged origin/${targetBranch} into ${portBranch}.`);
+      } else {
+        logger.info(`  ↩️  Continuing on existing port branch without syncing.`);
+      }
+    } else {
+      const { stdout: aheadOut } = await git(
+        ["rev-list", "--count", `origin/${targetBranch}..${portBranch}`],
+        cwd
+      );
+      const aheadCount = parseInt(aheadOut.trim(), 10) || 0;
+      logger.info(aheadCount > 0
+        ? `  ♻️  Resuming port branch — ${aheadCount} commit(s) already applied.`
+        : `  ♻️  Resuming port branch.`
+      );
+    }
+  } else {
+    const checkoutResult = await git(
+      ["checkout", "-b", portBranch, `origin/${targetBranch}`],
+      cwd
+    );
+    if (checkoutResult.exitCode !== 0) {
+      logger.error(`  ❌ Could not create port branch: ${checkoutResult.stderr}`);
+      return { target: targetBranch, portBranch, skipped: `checkout failed: ${checkoutResult.stderr}` };
+    }
   }
 
   // ── 5. Cherry-pick commits ─────────────────────────────────────────────────
@@ -466,54 +525,98 @@ export function registerPrPortCommand(pr: Command): void {
         return;
       }
 
-      // ── Fetch the PR's source branch ───────────────────────────────────────
-      const fetchSpinner = ora(`Fetching origin/${prData.head}…`).start();
-      const fetchResult = await git(["fetch", "origin", prData.head], cwd);
-      if (fetchResult.exitCode !== 0) {
-        // Try GitHub's PR ref (works for merged/deleted branches too)
-        const refResult = await git(
-          ["fetch", "origin", `refs/pull/${prNumber}/head:refs/remotes/origin/pr/${prNumber}`],
+      // ── Collect commits from the PR ────────────────────────────────────────
+      //
+      // Strategy (in order of preference):
+      //   1. git log origin/<base>..origin/<head>  — fastest, works for open PRs
+      //      with a live source branch
+      //   2. git log origin/<base>..origin/pr/<number>  — works when the branch
+      //      is gone but the provider's PR git ref is still available
+      //   3. provider.getPRCommits()  — provider REST API fallback; works for
+      //      any merged PR regardless of branch deletion or ref expiry
+      //
+      // For merged PRs the source branch is typically deleted, so we skip the
+      // branch fetch attempt and go straight to the provider API when strategy 1
+      // fails — this avoids a misleading "branch not found" warning.
+
+      let commits: Commit[] = [];
+
+      // ── Strategy 1: source branch still alive ─────────────────────────────
+      const fetchSpinner = ora(`Fetching commits for PR #${prNumber}…`).start();
+
+      const branchFetch = await git(["fetch", "origin", prData.head], cwd);
+      if (branchFetch.exitCode === 0) {
+        const logResult = await git(
+          ["log", "--format=%H %s", `origin/${prData.base}..origin/${prData.head}`],
           cwd
         );
-        if (refResult.exitCode !== 0) {
-          fetchSpinner.warn(`Could not fetch "${prData.head}" — it may have been deleted. Trying with local refs.`);
-        } else {
-          fetchSpinner.succeed(`Fetched PR #${prNumber} via refs/pull/${prNumber}/head`);
+        if (logResult.stdout.trim()) {
+          commits = logResult.stdout
+            .split("\n").map((l) => l.trim()).filter(Boolean)
+            .map((line) => {
+              const idx = line.indexOf(" ");
+              return { sha: line.slice(0, idx), subject: line.slice(idx + 1) };
+            })
+            .reverse();
+          fetchSpinner.succeed(`Fetched ${commits.length} commit(s) from origin/${prData.head}`);
         }
-      } else {
-        fetchSpinner.succeed(`Fetched origin/${prData.head}`);
       }
 
-      // ── Collect commits from the PR ────────────────────────────────────────
-      const headRef =
-        (await git(["rev-parse", "--verify", `origin/${prData.head}`], cwd)).exitCode === 0
-          ? `origin/${prData.head}`
-          : `origin/pr/${prNumber}`;
+      // ── Strategy 2: provider git ref (refs/pull/<id>/head etc.) ──────────
+      if (commits.length === 0) {
+        // Different ref formats per provider
+        const prRef =
+          ctx.provider === "gitlab"
+            ? `refs/merge-requests/${prNumber}/head`
+            : `refs/pull/${prNumber}/head`; // GitHub + Azure both support this
 
-      const baseRef = `origin/${prData.base}`;
+        const refFetch = await git(
+          ["fetch", "origin", `${prRef}:refs/remotes/origin/pr/${prNumber}`],
+          cwd
+        );
+        if (refFetch.exitCode === 0) {
+          const logResult = await git(
+            ["log", "--format=%H %s", `origin/${prData.base}..origin/pr/${prNumber}`],
+            cwd
+          );
+          if (logResult.stdout.trim()) {
+            commits = logResult.stdout
+              .split("\n").map((l) => l.trim()).filter(Boolean)
+              .map((line) => {
+                const idx = line.indexOf(" ");
+                return { sha: line.slice(0, idx), subject: line.slice(idx + 1) };
+              })
+              .reverse();
+            fetchSpinner.succeed(`Fetched ${commits.length} commit(s) via PR ref`);
+          }
+        }
+      }
 
-      const logResult = await git(
-        ["log", "--format=%H %s", `${baseRef}..${headRef}`],
-        cwd
-      );
+      // ── Strategy 3: provider REST API (always works for merged PRs) ───────
+      if (commits.length === 0) {
+        fetchSpinner.text = `Source branch deleted — fetching commits via provider API…`;
+        try {
+          const apiCommits = await provider.getPRCommits(ctx.repoSlug, prNumber);
+          if (apiCommits.length > 0) {
+            // Ensure the SHAs exist locally — a general fetch brings down everything
+            // that was merged into origin/<base>, which includes these commits.
+            await git(["fetch", "origin"], cwd);
+            // Trust the API SHAs; cherry-pick will report cleanly if any are missing.
+            commits = apiCommits;
+            fetchSpinner.succeed(`Fetched ${commits.length} commit(s) from provider API (branch was deleted)`);
+          }
+        } catch (apiErr) {
+          fetchSpinner.fail(`Could not retrieve commits for PR #${prNumber}: ${apiErr instanceof Error ? apiErr.message : String(apiErr)}`);
+          process.exitCode = 1;
+          return;
+        }
+      }
 
-      if (logResult.exitCode !== 0 || !logResult.stdout.trim()) {
-        logger.error(`❌ No commits found between ${baseRef} and ${headRef}.`);
-        logger.info(`   Make sure "${prData.base}" exists on origin.`);
+      if (commits.length === 0) {
+        fetchSpinner.fail(`No commits found for PR #${prNumber}.`);
         process.exitCode = 1;
         return;
       }
-
-      // git log is newest-first; reverse to oldest-first
-      const commits: Commit[] = logResult.stdout
-        .split("\n")
-        .map((l) => l.trim())
-        .filter(Boolean)
-        .map((line) => {
-          const spaceIdx = line.indexOf(" ");
-          return { sha: line.slice(0, spaceIdx), subject: line.slice(spaceIdx + 1) };
-        })
-        .reverse();
 
       if (commits.length === 0) {
         logger.info(`✅ PR #${prNumber} has no commits relative to "${prData.base}". Nothing to port.`);
@@ -524,14 +627,13 @@ export function registerPrPortCommand(pr: Command): void {
       logger.info(`\n🚢 gitx pr port`);
       logger.info(`   PR:      #${prNumber} — ${prData.title}`);
       logger.info(`   Source:  ${prData.head} → ${prData.base}`);
-      logger.info(`   Commits: ${commits.length}`);
       logger.info(`   Targets: ${targets.join(", ")}`);
+      logger.info(`\n   Commits to port (${commits.length}):`);
+      for (const { sha, subject } of commits) {
+        logger.info(`     ${sha.slice(0, 7)}  ${subject}`);
+      }
 
       if (opts.dryRun) {
-        logger.info(`\n📋 Commits that would be ported:\n`);
-        for (const { sha, subject } of commits) {
-          logger.info(`   + ${sha.slice(0, 7)} — ${subject}`);
-        }
         logger.info(`\n⏸  Dry run — no changes made.`);
         return;
       }

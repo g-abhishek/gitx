@@ -73,14 +73,9 @@ function tryBasicFilter(
 ): BasicFilterResult | null {
   const q = prompt.trim().toLowerCase();
 
-  // "me" / "my" / "mine" / "I" → match current user
-  if (/\b(me|my|mine|by me|created by me)\b/.test(q)) {
-    if (!currentUser) return null; // can't resolve without identity
-    const matched = prs.filter((p) => authorMatchesCurrentUser(p.author, currentUser));
-    return { prs: matched, explanation: `Showing PRs authored by you (${currentUser})` };
-  }
-
   // "by <name>" / "created by <name>" / "author <name>" / "authored by <name>"
+  // Must run BEFORE the "me/my/mine" check so "show me PRs by amar" doesn't
+  // accidentally match the word "me" and return the current user's PRs.
   const authorMatch = q.match(/(?:by|created by|author|authored by)\s+([a-z0-9_.\- ]+)/);
   if (authorMatch?.[1]) {
     const name = authorMatch[1].trim();
@@ -105,6 +100,16 @@ function tryBasicFilter(
     if (matched.length === 0) return null;
 
     return { prs: matched, explanation: `Showing PRs where author matches "${name}"` };
+  }
+
+  // "my PRs" / "mine" / "created by me" / "authored by me" / "by me"
+  // NOTE: plain \bme\b is intentionally excluded — it matches filler phrases
+  // like "show me PRs by amar" and would return the wrong result. Only match
+  // "me" when it's clearly the author reference (preceded by "by" / "authored by").
+  if (/\b(my\s+prs?|my\s+pull\s+requests?|mine|created\s+by\s+me|authored\s+by\s+me|by\s+me)\b/.test(q)) {
+    if (!currentUser) return null;
+    const matched = prs.filter((p) => authorMatchesCurrentUser(p.author, currentUser));
+    return { prs: matched, explanation: `Showing PRs authored by you (${currentUser})` };
   }
 
   // "to <branch>" / "targeting <branch>" / "target <branch>" / "into <branch>"

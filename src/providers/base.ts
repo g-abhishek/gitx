@@ -133,6 +133,13 @@ export interface GitProvider {
   replyToComment(repoSlug: string, prNumber: number, commentId: number, body: string): Promise<void>;
 
   /**
+   * Return the commits that were part of a pull request, ordered oldest → newest.
+   * Works for both open and merged PRs, even after the source branch is deleted.
+   * Used by `gitx pr port` as a fallback when the source branch is gone.
+   */
+  getPRCommits(repoSlug: string, prNumber: number): Promise<Array<{ sha: string; subject: string }>>;
+
+  /**
    * Return the display name of the currently authenticated user — exactly as
    * it appears in the `author` field of PRs created by that user.
    *

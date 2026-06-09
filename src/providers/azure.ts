@@ -338,6 +338,21 @@ export class AzureProvider implements GitProvider {
     }
   }
 
+  async getPRCommits(_repoSlug: string, prNumber: number): Promise<Array<{ sha: string; subject: string }>> {
+    try {
+      // Azure PR commits API returns commits in newest-first order; we reverse to oldest-first.
+      const { data } = await this.http.get<AzListResponse<{ commitId: string; comment: string }>>(
+        `/git/repositories/${this.repoName}/pullRequests/${prNumber}/commits`,
+        { params: this.apiParams() }
+      );
+      return (data.value ?? [])
+        .map((c) => ({ sha: c.commitId, subject: c.comment.split("\n")[0] ?? "" }))
+        .reverse();
+    } catch (err) {
+      throw wrapAzError(err, `get commits for PR #${prNumber}`);
+    }
+  }
+
   async getCurrentUser(): Promise<string> {
     try {
       // connectionData returns the authenticated identity — displayName matches

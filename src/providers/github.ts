@@ -292,6 +292,29 @@ export class GitHubProvider implements GitProvider {
     }
   }
 
+  async getPRCommits(repoSlug: string, prNumber: number): Promise<Array<{ sha: string; subject: string }>> {
+    try {
+      // GitHub returns up to 250 commits per PR; paginate just in case.
+      const commits: Array<{ sha: string; subject: string }> = [];
+      let page = 1;
+      while (true) {
+        const { data } = await this.http.get<Array<{ sha: string; commit: { message: string } }>>(
+          `/repos/${repoSlug}/pulls/${prNumber}/commits`,
+          { params: { per_page: 100, page } }
+        );
+        if (data.length === 0) break;
+        for (const c of data) {
+          commits.push({ sha: c.sha, subject: c.commit.message.split("\n")[0] ?? "" });
+        }
+        if (data.length < 100) break;
+        page++;
+      }
+      return commits; // GitHub returns oldest-first already
+    } catch (err) {
+      throw wrapGhError(err, `get commits for PR #${prNumber}`);
+    }
+  }
+
   async getCurrentUser(): Promise<string> {
     try {
       // GitHub PR authors are stored as login (username). Return "Name (login)"
