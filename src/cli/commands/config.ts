@@ -577,7 +577,7 @@ export async function runSetup(): Promise<void> {
   const cliAvail = await ClaudeCliAi.isAvailable();
 
   // ── Step 1: Git provider ─────────────────────────────────────────────────
-  logger.info("── Step 1 of 2: Git provider\n");
+  logger.info("── Step 1 of 3: Git provider\n");
 
   const hasAnyGitProvider = Object.values(existing.providers).some((v) => v?.token);
 
@@ -679,7 +679,7 @@ export async function runSetup(): Promise<void> {
   }
 
   // ── Step 2: AI provider ──────────────────────────────────────────────────
-  logger.info("\n── Step 2 of 2: AI provider\n");
+  logger.info("\n── Step 2 of 3: AI provider\n");
 
   if (cliAvail) logger.info("   ✓ Claude CLI detected on your system.\n");
 
@@ -800,12 +800,41 @@ export async function runSetup(): Promise<void> {
     }
   }
 
+  // ── Step 3: Jira integration (optional) ──────────────────────────────────
+  logger.info("\n── Step 3 of 3: Jira integration (optional)\n");
+  logger.info("   Enables: gitx implement --jira PROJ-123");
+  logger.info("   gitx will read the ticket, implement it, and link the PR back.\n");
+
+  const { setupJira } = await inquirer.prompt<{ setupJira: boolean }>([
+    {
+      type: "confirm",
+      name: "setupJira",
+      message: existing.jira
+        ? `Jira already configured (${existing.jira.url}). Reconfigure?`
+        : "Set up Jira integration?",
+      default: false,
+    },
+  ]);
+
+  let newJira = existing.jira;
+  if (setupJira) {
+    await setJiraConfig();
+    // Reload to pick up what setJiraConfig saved
+    const reloaded = await loadOrEmpty();
+    newJira = reloaded.jira;
+  } else if (existing.jira) {
+    logger.info("   Keeping existing Jira config.\n");
+  } else {
+    logger.info("   Skipped — run `gitx config set jira` anytime to set it up.\n");
+  }
+
   // ── Save ─────────────────────────────────────────────────────────────────
   const merged: GitxConfig = {
     providers: updatedProviders,
     ...(Object.keys(newAiProviders).length ? { aiProviders: newAiProviders } : {}),
     ...(newDefaultAi ? { defaultAiProvider: newDefaultAi } : {}),
     ...(existing.defaultBranch ? { defaultBranch: existing.defaultBranch } : {}),
+    ...(newJira ? { jira: newJira } : {}),
   };
 
   const spinner = ora("\nSaving config…").start();
@@ -820,5 +849,6 @@ export async function runSetup(): Promise<void> {
     logger.info(`   All AI:        ${Object.keys(merged.aiProviders).join(", ")}`);
     logger.info(`   Switch AI:     gitx config set-default-ai`);
   }
+  logger.info(`   Jira:          ${merged.jira ? `${merged.jira.url} (${merged.jira.email})` : "not configured"}`);
   logger.info(`\nRun \`gitx pr list\` or \`gitx implement "<task>"\` in any git repo.`);
 }
